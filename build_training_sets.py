@@ -15,7 +15,7 @@ from models.deeplib import buildBrainPhantomDataset
 
 
 # build PET recontruction object 
-temPath = r'C:\pythonWorkSpace\tmp003'
+temPath = r'./tmp/'
 PET = BuildGeometry_v4('mmr',0.5) #scanner mmr, with radial crop factor of 50%
 PET.loadSystemMatrix(temPath,is3d=False)
 
@@ -30,8 +30,8 @@ print('\nsinogram info:',PET.sinogram.as_dict())
 # see 'buildBrainPhantomDataset' for default values, e.g. count level, psf, no. lesions, lesion size, no. rotations, rotation range,....
 # LD/ld stands for low-definition low-dose, HD/hd stands for high-definition high-dose
 
-phanPath = r'C:\phantoms\brainWeb'
-save_training_dir = r'C:\MoDL\trainingDatasets\brainweb\2D'
+phanPath = r'./phantoms/Brainweb'
+save_training_dir = r"./MoDL/trainingDatasets/brainweb/2D"
 phanType ='brainweb'
 phanNumber = np.arange(0,5,1) # use first 5 brainweb phantoms out of 20
 
