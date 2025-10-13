@@ -376,6 +376,65 @@ class DatasetPetMr_v2(Dataset):
         return sinoLD, imgHD, AN, RS, imgLD, imgLD_psf, mrImg, counts, imgGT, index
 
 
+class DatasetPetHD(Dataset):
+    def __init__(
+        self,
+        filename,
+        num_train,
+        transform=None,
+        target_transform=None,
+        is3d=False,
+        imgLD_flname=None,
+        crop_factor=0,
+        allow_pickle=True,
+    ):
+        """
+        filename = ['save_dir,'prefix']
+        num_train =number of traning datasets
+        set "has_gtruth=False" for invivo data
+        """
+        self.transform = transform
+        self.target_transform = target_transform
+        self.is3d = is3d
+        self.filename = filename
+        self.num_train = num_train
+        self.imgLD_flname = imgLD_flname
+        self.crop_factor = crop_factor
+        self.allow_pickle = allow_pickle
+
+    def crop_sino(self, sino):
+        if self.crop_factor != 0:
+            i = int(ceil(sino.shape[0] * self.crop_factor / 2.0) * 2) // 2
+            sinOut = sino[i : sino.shape[0] - i]
+        else:
+            sinOut = sino
+        return sinOut
+
+    def crop_img(self, img):
+        if self.crop_factor != 0:
+            i = int(ceil(img.shape[0] * self.crop_factor / 2.0) * 2) // 2
+            imgOut = img[i : img.shape[0] - i, i : img.shape[1] - i]
+        else:
+            imgOut = img
+        return imgOut
+
+    def __len__(self):
+        return self.num_train
+
+    def __getitem__(self, index):
+        dset = load(
+            self.filename[0] + self.filename[1] + str(index) + ".npy",
+            allow_pickle=self.allow_pickle,
+        ).item()
+
+        imgHD = self.crop_img(dset["imgHD"])
+
+        if self.target_transform is not None:
+            imgHD = self.target_transform(imgHD)
+
+        return imgHD
+
+
 def train_test_split(
     dset, num_train, batch_size, test_size, valid_size=0, num_workers=0, shuffle=True
 ):
@@ -440,6 +499,36 @@ def PETMrDataset(
     crop_factor=0,
 ):
     dset = DatasetPetMr_v2(
+        filename,
+        num_train,
+        transform,
+        target_transform,
+        is3d,
+        imgLD_flname,
+        crop_factor,
+    )
+    train_loader, test_loader, valid_loader = train_test_split(
+        dset, num_train, batch_size, test_size, valid_size, num_workers, shuffle
+    )
+    # for indecs call train_loader.sampler.indices
+    return train_loader, valid_loader, test_loader
+
+
+def PETdatasetHD(
+    filename,
+    num_train,
+    batch_size,
+    test_size,
+    valid_size=0,
+    num_workers=0,
+    transform=None,
+    target_transform=None,
+    is3d=False,
+    imgLD_flname=None,
+    shuffle=True,
+    crop_factor=0,
+):
+    dset = DatasetPetHD(
         filename,
         num_train,
         transform,

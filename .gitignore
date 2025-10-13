@@ -16,3 +16,5 @@ __pycache__/
 *.aux
 phantoms/Brainweb/
 MoDL/
+wandb/
+wandb_api_key.txt

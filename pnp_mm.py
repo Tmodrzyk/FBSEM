@@ -30,25 +30,27 @@ radialBinCropFactor = 0.5
 PET = BuildGeometry_v4("mmr", radialBinCropFactor)
 PET.loadSystemMatrix(temPath, is3d=False)
 
-img_3d, mumap_3d, t1_3d, _ = PETbrainWebPhantom(
+img_3d, mumap_3d, t1_2d, _ = PETbrainWebPhantom(
     phanPath,
     phantom_number=1,
     voxel_size=np.array(PET.image.voxelSizeCm) * 10,
     image_size=PET.image.matrixSize,
     pet_lesion=False,
     t1_lesion=False,
+    num_lesions=0,
+    hot_cold_ratio=0.9,
 )
 
 img_2d = img_3d[:, :, 50]
 mumap_2d = mumap_3d[:, :, 50]
-t1_3d = t1_3d[:, :, 50]
+t1_2d = t1_2d[:, :, 50]
 psf_cm = 0.25
 
 dinv.utils.plot(
     [
         torch.from_numpy(img_2d).unsqueeze(0).unsqueeze(0),
         torch.from_numpy(mumap_2d).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(t1_3d).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(t1_2d).unsqueeze(0).unsqueeze(0),
     ],
     figsize=(15, 5),
 )
@@ -78,7 +80,6 @@ AN_hd = AF_hd * NF_hd
 AN_ld = AF_ld * NF_ld
 osem_hd = PET.OSEM2D(y_hd, AN=AN_hd, niter=niter_hd, nsubs=nsubs_hd, psf=psf_hd)
 osem_ld = PET.OSEM2D(y_ld, AN=AN_ld, niter=niter_ld, nsubs=nsubs_ld, psf=psf_ld)
-
 # %%
 dinv.utils.plot(
     [
@@ -255,12 +256,12 @@ denoiser = dinv.models.GSDRUNet(
 
 
 sigma_denoiser_ld = 20 / 255.0
-lambda_reg_ld = 0.9
+lambda_reg_ld = 0.92
 stepsize_ld = 1e8
 
-sigma_denoiser_hd = 5 / 255.0
-lambda_reg_hd = 0.1
-stepsize_hd = 1e8
+# sigma_denoiser_hd = 5 / 255.0
+# lambda_reg_hd = 0.1
+# stepsize_hd = 1e8
 
 pnp_mm_ld = PnP_MM2D(
     PET,
@@ -274,30 +275,51 @@ pnp_mm_ld = PnP_MM2D(
     tau=stepsize_ld,
     nonneg=True,
 )
-pnp_mm_hd = PnP_MM2D(
-    PET,
-    y_hd,
-    AN=AN_hd,
-    niter=iter_pnpmm,
-    nsubs=1,
-    denoiser=denoiser,
-    sigma=sigma_denoiser_hd,
-    lam=lambda_reg_hd,
-    tau=stepsize_hd,
-    nonneg=True,
-)
+# pnp_mm_hd = PnP_MM2D(
+#     PET,
+#     y_hd,
+#     AN=AN_hd,
+#     niter=iter_pnpmm,
+#     nsubs=1,
+#     denoiser=denoiser,
+#     sigma=sigma_denoiser_hd,
+#     lam=lambda_reg_hd,
+#     tau=stepsize_hd,
+#     nonneg=True,
+# )
+map_em_ld = PET.MAPEM2D(y_ld, AN=AN_ld, beta=0.06, niter=10, nsubs=6)
 
-# %%
+
+# Center crop the images first
+def center_crop(img, crop_size):
+    h, w = img.shape
+    start_h = (h - crop_size) // 2
+    start_w = (w - crop_size) // 2
+    return img[start_h : start_h + crop_size, start_w : start_w + crop_size]
+
+
+crop_size = 110  # adjust as needed
+osem_ld_cropped = center_crop(osem_ld, crop_size)
+pnp_mm_ld_cropped = center_crop(pnp_mm_ld, crop_size)
+osem_hd_cropped = center_crop(osem_hd, crop_size)
+map_em_ld_cropped = center_crop(map_em_ld, crop_size)
+
 dinv.utils.plot(
     [
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(pnp_mm_hd).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_ld).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(pnp_mm_ld).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(osem_ld_cropped).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(map_em_ld_cropped).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(pnp_mm_ld_cropped).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
     ],
-    titles=["OSEM HD", "PnP MM HD", "OSEM LD", "PnP MM LD"],
+    titles=[
+        "OSEM\n (low-dose)",
+        "MAP-EM \n (low-dose)",
+        "PnP-MM \n (low-dose)",
+        "Reference OSEM \n (high-dose)",
+    ],
     figsize=(20, 10),
-    cmap="magma_r",
+    cmap="gist_gray_r",
+    fontsize=40,
 )
 
 nmse = dinv.metric.NMSE()
@@ -317,9 +339,9 @@ print(
     ).item(),
 )
 print(
-    "NMSE PnP MM HD: ",
+    "NMSE MAP EM LD: ",
     nmse(
-        torch.from_numpy(pnp_mm_hd).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(map_em_ld).unsqueeze(0).unsqueeze(0),
         torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
     ).item(),
 )
