@@ -1,0 +1,15 @@
+#!/bin/bash
+#PBS -N gsdrunet_brainweb_2d
+#PBS -l nodes=1:ppn=12:gpu=1
+#PBS -l mem=64gb
+#PBS -l walltime=12:00:00
+#PBS -o brainweb_dataset.o
+#PBS -e brainweb_dataset.err
+#PBS -m ae
+#PBS -M thibaut.modrzyk@creatis.insa-lyon.fr
+set -e
+  
+cd "${PBS_O_WORKDIR}"
+hostname
+source .venv/bin/activate
+python train_gsdrunet.py
