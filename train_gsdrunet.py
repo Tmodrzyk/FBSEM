@@ -95,6 +95,8 @@ optimizer = torch.optim.Adam(
 epochs = 500
 
 save_path = Path("weights/GSDRUNet-brainweb/")
+os.makedirs(save_path, exist_ok=True)
+
 # Initialize wandb
 with open(Path("wandb_api_key.txt"), "r") as f:
     api_key = f.read().strip()
@@ -117,6 +119,7 @@ trainer = Trainer(
     epochs=epochs,
     ckp_interval=2,
     grad_clip=1.0,
+    wandb_vis=True,
 )
 
 model = trainer.train()
