@@ -25,14 +25,12 @@ print("\nimage info:", PET.image.as_dict())
 print("\nsinogram info:", PET.sinogram.as_dict())
 
 
-# this will take hours (5 phantoms, 5 random rotations each, lesion & sinogram simulation, 3 different recon,...)
-# see 'buildBrainPhantomDataset' for default values, e.g. count level, psf, no. lesions, lesion size, no. rotations, rotation range,....
-# LD/ld stands for low-definition low-dose, HD/hd stands for high-definition high-dose
+# Should produce 100 test slices (5 phantoms, 4 random rotations each, 5 slices each,...)
 
 phanPath = r"./phantoms/Brainweb"
-save_training_dir = r"./MoDL/trainingDatasets/brainweb/2D"
+save_training_dir = r"./MoDL/testDatasets/brainweb/2D"
 phanType = "brainweb"
-phanNumber = np.arange(0, 5, 1)  # use first 5 brainweb phantoms out of 20
+phanNumber = np.arange(5, 10, 1)  # use first brainweb phantoms 5-10 out of 20
 
 buildBrainPhantomDataset(
     PET,
@@ -41,5 +39,6 @@ buildBrainPhantomDataset(
     phanType=phanType,
     phanNumber=phanNumber,
     is3d=False,
-    num_rand_rotations=5,
+    num_rand_rotations=4,
+    slices_2d=np.arange(70, 80, 2),  # 5 middle slices are chosen (contain mostly brain)
 )
