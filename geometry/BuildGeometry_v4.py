@@ -1567,6 +1567,8 @@ class BuildGeometry_v4:
             iSensImageSubBatch = iSensImageSubBatch[0, :, :]
         return iSensImageSubBatch
 
+    # RS: randoms+scatter
+    # AN: attenuation normalization
     def OSEM2D(
         self,
         prompts,

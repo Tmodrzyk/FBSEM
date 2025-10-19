@@ -5,7 +5,11 @@ import torch
 import pathlib
 import deepinv as dinv
 from phantoms.brainweb import PETbrainWebPhantom
+import matplotlib.pyplot as plt
+import seaborn as sns
+from models.modellib import FBSEMnet_v3, Trainer, fbsemInference
 
+sns.set_theme("notebook")
 data_path = pathlib.Path(r"./MoDL/trainingDatasets/brainweb/2D/data-0.npy")
 data = np.load(data_path, allow_pickle=True).item()
 
@@ -28,9 +32,9 @@ phanPath = r"../phantoms/Brainweb/"
 radialBinCropFactor = 0.5
 
 PET = BuildGeometry_v4("mmr", radialBinCropFactor)
-PET.loadSystemMatrix(temPath, is3d=False)
+PET.loadSystemMatrix(temPath, is3d=False, tof=False)
 
-img_3d, mumap_3d, t1_2d, _ = PETbrainWebPhantom(
+img_3d, mumap_3d, t1_3d, _ = PETbrainWebPhantom(
     phanPath,
     phantom_number=1,
     voxel_size=np.array(PET.image.voxelSizeCm) * 10,
@@ -43,7 +47,7 @@ img_3d, mumap_3d, t1_2d, _ = PETbrainWebPhantom(
 
 img_2d = img_3d[:, :, 50]
 mumap_2d = mumap_3d[:, :, 50]
-t1_2d = t1_2d[:, :, 50]
+t1_2d = t1_3d[:, :, 50]
 psf_cm = 0.25
 
 dinv.utils.plot(
@@ -75,18 +79,26 @@ y_hd, AF_hd, NF_hd, Randoms_hd = PET.simulateSinogramData(
 y_ld, AF_ld, NF_ld, Randoms_ld = PET.simulateSinogramData(
     img_2d, mumap=mumap_2d, counts=counts_ld, psf=psf_ld
 )
+
+# %%
 # 2D OSEM
 AN_hd = AF_hd * NF_hd
 AN_ld = AF_ld * NF_ld
-osem_hd = PET.OSEM2D(y_hd, AN=AN_hd, niter=niter_hd, nsubs=nsubs_hd, psf=psf_hd)
-osem_ld = PET.OSEM2D(y_ld, AN=AN_ld, niter=niter_ld, nsubs=nsubs_ld, psf=psf_ld)
-# %%
-dinv.utils.plot(
-    [
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_ld).unsqueeze(0).unsqueeze(0),
-    ],
-    figsize=(10, 5),
+osem_hd = PET.OSEM2D(y_hd, AN=AN_hd, niter=niter_hd, nsubs=nsubs_hd, psf=0)
+osem_ld = PET.OSEM2D(y_ld, AN=AN_ld, niter=niter_ld, nsubs=nsubs_ld, psf=0)
+
+map_em_ld = PET.MAPEM2D(y_ld, AN=AN_ld, beta=0.06, niter=10, nsubs=6)
+dl_model_flname = (
+    r"/home/modrzyk/code/FBSEM/model_zoo/brainweb/2d/fbsem-pm-03-epo-45.pth"
+)
+fbsem_ld = fbsemInference(
+    dl_model_flname,
+    PET,
+    torch.from_numpy(y_ld).unsqueeze(0),
+    torch.from_numpy(AN_ld).unsqueeze(0),
+    torch.from_numpy(t1_2d).unsqueeze(0),
+    niters=10,
+    nsubs=6,
 )
 
 
@@ -100,11 +112,10 @@ def PnP_MM2D(
     iSensImg=None,
     niter=20,
     nsubs=1,
-    tof=False,
     psf=0,
     denoiser=None,  # callable: denoiser(img2d, sigma) -> img2d  (or batch-aware)
-    sigma=None,
-    lam=1.0,  # \lambda in your equations
+    sigma=0.1,
+    lambda_reg=1.0,  # \lambda in your equations
     tau=1e-2,  # \tau in your equations
     nonneg=True,
 ):
@@ -119,15 +130,12 @@ def PnP_MM2D(
     """
     import time
 
+    xs = []
     tic = time.time()
 
     # --- Shapes / batching ---
-    if tof and not PET.scanner.isTof:
-        raise ValueError("The scanner is not TOF")
     if np.ndim(prompts) == 2:  # (nr, na) -> add batch dim
         prompts = prompts[None, :, :]
-    elif np.ndim(prompts) == 3 and tof:  # (nr, na, ntof) -> add batch dim
-        prompts = prompts[None, :, :, :]
 
     batch_size = prompts.shape[0]
     H, W = PET.image.matrixSize[:2]
@@ -144,8 +152,6 @@ def PnP_MM2D(
     # defaults for AN/RS
     if RS is None:
         dims = (batch_size, PET.sinogram.nRadialBins, PET.sinogram.nAngularBins)
-        if tof and PET.scanner.isTof:
-            dims += (PET.sinogram.nTofBins,)
         RS = np.zeros(dims, dtype=float)
 
     if AN is None:
@@ -158,57 +164,66 @@ def PnP_MM2D(
 
     # per-subset inverse sensitivity:  iSensImg[b, sub, nvox] = 1 / s_sub
     if iSensImg is None:
-        iSensImg = PET.iSensImageBatch2D(
-            AN=AN, nsubs=nsubs, psf=psf
-        )  # returns (batch, nsubs, nvox)
+        iSensImg = PET.iSensImageBatch2D(AN=AN, nsubs=nsubs, psf=psf)
     if np.ndim(iSensImg) == 2:
         iSensImg = iSensImg[None, :, :]
+
+    eps = 1e-24
 
     # denoiser wrapper (identity if None)
     def _denoise_batch(x_vec):
         # x_vec: (batch, nvox) -> returns (batch, nvox)
         x_imgs = x_vec.reshape((batch_size, H, W), order="F")
         x_imgs = torch.from_numpy(x_imgs).unsqueeze(1).to("cuda")
-        x_imgs = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
+        # Crop to 128x128 for denoising
+        h_orig, w_orig = x_imgs.shape[-2:]
+        crop_h, crop_w = 128, 128
+        start_h = (h_orig - crop_h) // 2
+        start_w = (w_orig - crop_w) // 2
+        x_imgs_cropped = x_imgs[
+            :, :, start_h : start_h + crop_h, start_w : start_w + crop_w
+        ]
 
-        if denoiser is None:
-            x_hat = x_imgs
-        else:
-            # support both batch-aware and per-image denoisers
-            try:
-                x_hat = (
-                    denoiser(x_imgs, sigma) if sigma is not None else denoiser(x_imgs)
-                )
-            except TypeError:
-                x_hat = np.stack(
-                    [
-                        (
-                            denoiser(x_imgs[b], sigma)
-                            if sigma is not None
-                            else denoiser(x_imgs[b])
-                        )
-                        for b in range(batch_size)
-                    ],
-                    axis=0,
-                )
-            x_hat = torch.clamp(x_hat, min=0)  # clamp to non-negative values
+        # Normalize the cropped image
+        x_imgs_cropped_norm = (x_imgs_cropped - x_imgs_cropped.min()) / (
+            x_imgs_cropped.max() - x_imgs_cropped.min() + 1e-8
+        )
+
+        # Denoise the cropped image
+        x_hat_cropped = denoiser(x_imgs_cropped_norm, sigma)
+        x_hat_cropped = torch.clamp(x_hat_cropped, min=eps)
+
+        # Denormalize the cropped denoised image
+        x_hat_cropped = (
+            x_hat_cropped * (x_imgs_cropped.max() - x_imgs_cropped.min())
+            + x_imgs_cropped.min()
+        )
+
+        # Put the denoised crop back into the original size
+        x_hat = x_imgs.clone()
+        x_hat[:, :, start_h : start_h + crop_h, start_w : start_w + crop_w] = (
+            x_hat_cropped
+        )
+        x_imgs_norm = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
+
+        # support both batch-aware and per-image denoisers
+        x_hat = denoiser(x_imgs_norm, sigma)
+        x_hat = torch.clamp(x_hat, min=eps)  # clamp to non-negative values
 
         # Denormalize the denoised image
-        x_hat = x_hat * (x_imgs.max() - x_imgs.min() + 1e-8) + x_imgs.min()
+        x_hat = x_hat * (x_imgs.max() - x_imgs.min()) + x_imgs.min()
         x_hat = x_hat.squeeze(1).cpu().detach().numpy()
         return x_hat.reshape((batch_size, nvox), order="F")
 
-    eps = 1e-8
-
     for it in range(niter):
-        # 1) denoiser-relaxation
-        x_deno = _denoise_batch(x)
-        x13 = (1.0 - lam) * x + lam * x_deno
+        # # 1) denoiser-relaxation
 
-        # ordered-subset sweep: use the LATEST estimate for the ratio denominator
-        x_cur = x13.copy()
+        if it > 0:
+            x_deno = lambda_reg * _denoise_batch(x) + (1 - lambda_reg) * x_cur
+            x_cur = x_deno.copy()
+        else:
+            x_cur = x.copy()
         for sub in range(nsubs):
-            # use CURRENT image for Ax in the ratio y / (A x_cur + R)
             back = PET.forwardDivideBackwardBatch2D(
                 imgb=x_cur.reshape((batch_size, H, W), order="F"),
                 prompts=prompts,
@@ -216,26 +231,22 @@ def PnP_MM2D(
                 AN=AN,
                 nsubs=nsubs,
                 subset_i=sub,
-                tof=tof,
+                tof=False,
                 psf=psf,
-            )  # (batch, nvox)
+            )
 
             inv_s = iSensImg[:, sub, :]  # = 1 / s_sub
             s_sub = 1.0 / np.maximum(inv_s, eps)
 
-            # per your formula, x^{2/3} uses x^{1/3} (not x_cur)
-            x23 = x13 * back  # (x^{1/3} / s_sub) * A^T[ y / (A x_cur + R) ]
-
-            # quadratic per-subset update with s_sub
-            a = x13 - tau * s_sub
-            b = (a * a) + 4.0 * tau * x23
-            x_next = 0.5 * (a + np.sqrt(np.maximum(b, 0.0)))
+            a = x_cur - tau * s_sub
+            x_next = 0.5 * (a + np.sqrt((a * a) + 4.0 * tau * x_cur * back))
 
             if nonneg:
                 x_next = np.maximum(x_next, 0.0)
 
-            x_cur = x_next  # advance within the sweep
+            x_cur = x_next
 
+            xs.append(x_cur.reshape((H, W), order="F").copy())
         x = x_cur
 
     # --- reshape back to images ---
@@ -245,25 +256,22 @@ def PnP_MM2D(
     print(
         f"{batch_size} batches reconstructed with PnP_EM2D in {time.time()-tic:.3f} s."
     )
-    return out
+    return out, xs
 
 
 # %%
-iter_pnpmm = 100
+iter_pnpmm = 40
+pretrained_path = pathlib.Path("./weights/25-10-13-14:12:28/ckp_best.pth.tar")
 denoiser = dinv.models.GSDRUNet(
-    in_channels=1, out_channels=1, pretrained="download"
+    in_channels=1, out_channels=1, pretrained=pretrained_path
 ).to("cuda")
 
 
 sigma_denoiser_ld = 20 / 255.0
-lambda_reg_ld = 0.92
-stepsize_ld = 1e8
+lambda_reg_ld = 0.1
+stepsize_ld = 1e9
 
-# sigma_denoiser_hd = 5 / 255.0
-# lambda_reg_hd = 0.1
-# stepsize_hd = 1e8
-
-pnp_mm_ld = PnP_MM2D(
+pnp_mm_ld, xs = PnP_MM2D(
     PET,
     y_ld,
     AN=AN_ld,
@@ -271,23 +279,10 @@ pnp_mm_ld = PnP_MM2D(
     nsubs=1,
     denoiser=denoiser,
     sigma=sigma_denoiser_ld,
-    lam=lambda_reg_ld,
+    lambda_reg=lambda_reg_ld,
     tau=stepsize_ld,
     nonneg=True,
 )
-# pnp_mm_hd = PnP_MM2D(
-#     PET,
-#     y_hd,
-#     AN=AN_hd,
-#     niter=iter_pnpmm,
-#     nsubs=1,
-#     denoiser=denoiser,
-#     sigma=sigma_denoiser_hd,
-#     lam=lambda_reg_hd,
-#     tau=stepsize_hd,
-#     nonneg=True,
-# )
-map_em_ld = PET.MAPEM2D(y_ld, AN=AN_ld, beta=0.06, niter=10, nsubs=6)
 
 
 # Center crop the images first
@@ -298,31 +293,47 @@ def center_crop(img, crop_size):
     return img[start_h : start_h + crop_size, start_w : start_w + crop_size]
 
 
-crop_size = 110  # adjust as needed
+crop_size = 128  # adjust as needed
 osem_ld_cropped = center_crop(osem_ld, crop_size)
 pnp_mm_ld_cropped = center_crop(pnp_mm_ld, crop_size)
 osem_hd_cropped = center_crop(osem_hd, crop_size)
 map_em_ld_cropped = center_crop(map_em_ld, crop_size)
+fbsem_ld_cropped = center_crop(fbsem_ld, crop_size)
 
-dinv.utils.plot(
-    [
-        torch.from_numpy(osem_ld_cropped).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(map_em_ld_cropped).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(pnp_mm_ld_cropped).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
-    ],
-    titles=[
-        "OSEM\n (low-dose)",
-        "MAP-EM \n (low-dose)",
-        "PnP-MM \n (low-dose)",
-        "Reference OSEM \n (high-dose)",
-    ],
-    figsize=(20, 10),
-    cmap="gist_gray_r",
-    fontsize=40,
-)
+fig, axes = plt.subplots(1, 5, figsize=(20, 10))
+images_lc = [
+    osem_ld_cropped,
+    map_em_ld_cropped,
+    fbsem_ld_cropped,
+    pnp_mm_ld_cropped,
+    osem_hd_cropped,
+]
+titles_lc = [
+    "OSEM\n (low-dose)",
+    "MAP-EM \n (low-dose)",
+    "FBSEM \n (low-dose)",
+    "PnP-MM \n (low-dose)",
+    "Reference OSEM \n (high-dose)",
+]
+
+for ax, img, title in zip(axes.flatten(), images_lc, titles_lc):
+    im = ax.imshow(img, cmap="gist_gray_r")
+    ax.set_title(title, fontsize=15)
+    ax.axis("off")
+
+fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6)
+plt.show()
 
 nmse = dinv.metric.NMSE()
+nmse_pnpmm = [
+    nmse(
+        torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+    )
+    for x in xs
+]
+
+plt.plot(nmse_pnpmm)
 
 print(
     "NMSE OSEM LD: ",
@@ -332,9 +343,9 @@ print(
     ).item(),
 )
 print(
-    "NMSE PnP MM LD: ",
+    "NMSE FBSEM LD: ",
     nmse(
-        torch.from_numpy(pnp_mm_ld).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(fbsem_ld).unsqueeze(0).unsqueeze(0),
         torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
     ).item(),
 )
@@ -345,5 +356,24 @@ print(
         torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
     ).item(),
 )
+print(
+    "NMSE PnP MM LD: ",
+    nmse(
+        torch.from_numpy(pnp_mm_ld).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
+    ).item(),
+)
+
+print("Max values of reconstructions:")
+print(f"OSEM LD max: {osem_ld.max():.6f}")
+print(f"MAP-EM LD max: {map_em_ld.max():.6f}")
+print(f"FBSEM LD max: {fbsem_ld.max():.6f}")
+print(f"PnP-MM LD max: {pnp_mm_ld.max():.6f}")
+print(f"OSEM HD max: {osem_hd.max():.6f}")
+
+# %%
+xs = [torch.from_numpy(x).unsqueeze(0).unsqueeze(0) for x in xs]
+# %%
+dinv.utils.plot(xs[5:], figsize=(20, 10), cmap="gist_gray_r")
 
 # %%

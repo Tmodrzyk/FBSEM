@@ -786,7 +786,6 @@ class Trainer:
             )
             # Compute loss and perform backprop
             loss_cur, x_net, logs = self.compute_loss(
-                physics_cur,
                 x,
                 y,
                 train=train,

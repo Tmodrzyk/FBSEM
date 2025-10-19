@@ -338,7 +338,9 @@ def fbsemInference(
 ):
     toNumpy = lambda x: x.detach().cpu().numpy().astype("float32")
 
-    g = torch.load(dl_model_flname, map_location=torch.device(device))
+    g = torch.load(
+        dl_model_flname, map_location=torch.device(device), weights_only=False
+    )
 
     model = FBSEMnet_v3(
         g["depth"],
