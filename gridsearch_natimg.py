@@ -95,12 +95,13 @@ def objective(trial, dataset, denoiser):
         )
 
         pnp_mm_ld = torch.from_numpy(pnp_mm_ld).unsqueeze(0).to(device)
-        nmrse_val = torch.sqrt(
+        nmrse_val = (
             mse(
                 pnp_mm_ld,
                 imgHD.to(device),
-            )
-        ) / torch.norm(imgHD.to(device))
+            ).sqrt()
+            / torch.norm(imgHD.to(device)).sqrt()
+        ) * 100
         avg_nrmse += nmrse_val.item()
 
     avg_nrmse /= num_samples
@@ -119,7 +120,7 @@ dataset = DatasetPetMr_v2(
 
 # Define Optuna study for multi-objective optimization (maximize PSNR and SSIM)
 study = optuna.create_study(
-    directions=["maximize"],  # NRMSE
+    directions=["minimize"],  # NRMSE
     study_name=f"gridsearch_pnpmm_natural_images",
     storage=f"sqlite:///gridsearch_pnpmm_natural_images.db",  # Persist study results
     load_if_exists=True,  # Continue from existing study if available
