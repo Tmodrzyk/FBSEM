@@ -124,13 +124,15 @@ study = optuna.create_study(
     storage=f"sqlite:///gridsearch_pnpmm_natural_images.db",  # Persist study results
     load_if_exists=True,  # Continue from existing study if available
 )
-ckpt_path = pathlib.Path("./weights/GSDRUNet.ckpt")
+ckpt_path = pathlib.Path("./weights/GSDRUNet_grayscale_torch.ckpt")
 denoiser = dinv.models.GSDRUNet(in_channels=1, out_channels=1, pretrained=ckpt_path).to(
     device
 )
 
-# Optimize
+# Optimizeg
 study.optimize(
     lambda trial: objective(trial, dataset, denoiser),
     n_trials=500,
 )
+
+# %%

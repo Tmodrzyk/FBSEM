@@ -93,7 +93,6 @@ def objective(trial, dataset, denoiser):
             lambda_reg=lambda_reg,
             tau=1e2,
         )
-
         pnp_mm_ld = torch.from_numpy(pnp_mm_ld).unsqueeze(0).to(device)
         nmrse_val = torch.sqrt(
             mse(
