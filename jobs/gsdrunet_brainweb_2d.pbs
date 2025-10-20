@@ -1,6 +1,6 @@
 #!/bin/bash
 #PBS -N gsdrunet_brainweb_2d
-#PBS -l nodes=1:ppn=12:gpu=1
+#PBS -l nodes=1:ppn=12:gpus=1
 #PBS -l mem=64gb
 #PBS -l walltime=12:00:00
 #PBS -o brainweb_dataset.o
