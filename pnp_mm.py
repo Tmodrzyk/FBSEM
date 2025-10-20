@@ -110,8 +110,8 @@ denoiser = dinv.models.GSDRUNet(
 ).to("cuda")
 
 
-sigma_denoiser_ld = 10 / 255.0
-lambda_reg_ld = 0.15
+sigma_denoiser_ld = 16 / 255.0
+lambda_reg_ld = 0.1
 stepsize_ld = 1e2
 
 pnp_mm_ld, xs = PET.PnP_MM2D(
@@ -130,6 +130,7 @@ pnp_mm_ld, xs = PET.PnP_MM2D(
 )
 
 
+# %%
 # Center crop the images first
 def center_crop(img, crop_size):
     h, w = img.shape
@@ -169,44 +170,73 @@ for ax, img, title in zip(axes.flatten(), images_lc, titles_lc):
 fig.colorbar(im, ax=axes.ravel().tolist(), shrink=0.6)
 plt.show()
 
-nmse = dinv.metric.NMSE()
-nmse_pnpmm = [
-    nmse(
-        torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+mse = dinv.metric.MSE()
+rnmse_pnpmm = [
+    (
+        torch.sqrt(
+            mse(
+                torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
+                torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+            )
+        )
+        / torch.norm(torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0)).sqrt()
     )
+    * 100
     for x in xs
 ]
 
-plt.plot(nmse_pnpmm)
-
+plt.plot(rnmse_pnpmm)
 print(
     "NMSE OSEM LD: ",
-    nmse(
-        torch.from_numpy(osem_ld).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-    ).item(),
+    (
+        torch.sqrt(
+            mse(
+                torch.from_numpy(osem_ld_cropped).unsqueeze(0).unsqueeze(0),
+                torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+            )
+        )
+        / torch.norm(torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0)).sqrt()
+    ).item()
+    * 100,
 )
 print(
     "NMSE FBSEM LD: ",
-    nmse(
-        torch.from_numpy(fbsem_ld).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-    ).item(),
+    (
+        torch.sqrt(
+            mse(
+                torch.from_numpy(fbsem_ld_cropped).unsqueeze(0).unsqueeze(0),
+                torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+            )
+        )
+        / torch.norm(torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0)).sqrt()
+    ).item()
+    * 100,
 )
 print(
     "NMSE MAP EM LD: ",
-    nmse(
-        torch.from_numpy(map_em_ld).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-    ).item(),
+    (
+        torch.sqrt(
+            mse(
+                torch.from_numpy(map_em_ld_cropped).unsqueeze(0).unsqueeze(0),
+                torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+            )
+        )
+        / torch.norm(torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0)).sqrt()
+    ).item()
+    * 100,
 )
 print(
     "NMSE PnP MM LD: ",
-    nmse(
-        torch.from_numpy(pnp_mm_ld).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(osem_hd).unsqueeze(0).unsqueeze(0),
-    ).item(),
+    (
+        torch.sqrt(
+            mse(
+                torch.from_numpy(pnp_mm_ld_cropped).unsqueeze(0).unsqueeze(0),
+                torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0),
+            )
+        )
+        / torch.norm(torch.from_numpy(osem_hd_cropped).unsqueeze(0).unsqueeze(0)).sqrt()
+    ).item()
+    * 100,
 )
 
 print("Max values of reconstructions:")
