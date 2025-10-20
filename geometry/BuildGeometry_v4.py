@@ -2238,34 +2238,59 @@ class BuildGeometry_v4:
         iSensImg=None,
         niter=20,
         nsubs=1,
-        tof=False,
         psf=0,
-        denoiser=None,  # callable: denoiser(img2d, sigma) -> img2d  (or batch-aware)
-        sigma=None,
-        lam=1.0,  # \lambda in your equations
-        tau=1e-2,  # \tau in your equations
-        nonneg=True,
+        denoiser=None,
+        sigma=0.1,
+        lambda_reg=1.0,
+        tau=1e2,
     ):
         """
-        Plug-and-Play EM-like 2D algorithm implementing:
-            x^{n+1/3} = (1 - lam*tau) * x^n + lam*tau * D_sigma(x^n)
-            x^{n+2/3} = (x^{n+1/3} / s) * A^T [ y / (A x^{n+1/3} + R) ]
-            x^{n+1}   = 0.5 * [ x^{n+1/3} - tau*s + sqrt( (x^{n+1/3} - tau*s)^2 + 4*tau*s*x^{n+2/3} ) ]
-
-        where s is the (subset) sensitivity image P_s^T 1 (with AN/TOF/PSF handled consistently).
-        The EM ratio/backprojection is realized with self.forwardDivideBackwardBatch2D(...).
+        Plug-and-Play Majorize-Minimize algorithm for 2D PET image reconstruction.
+        This function performs iterative PET image reconstruction using a Plug-and-Play
+        denoising approach combined with a Majorize-Minimize optimization scheme. The
+        algorithm alternates between denoising steps and data consistency updates.
+        Only works for one subset.
+        Args:
+            PET: PET system object containing geometry and reconstruction methods
+            prompts (np.ndarray): Prompt sinogram data. Shape can be (nr, na) or (batch, nr, na)
+            img (np.ndarray, optional): Initial image estimate. If None, initializes to ones.
+                Shape can be (H, W) or (batch, H, W).
+            RS (np.ndarray, optional): Random/scatter sinogram. If None, initializes to zeros.
+                Shape (batch, nr, na).
+            AN (np.ndarray, optional): Attenuation/normalization factors. If None, initializes to ones.
+                Shape can be (nr, na) or (batch, nr, na).
+            iSensImg (np.ndarray, optional): Inverse sensitivity images for subsets.
+                Shape (batch, nsubs, nvox). If None, computed automatically.
+            niter (int, optional): Number of iterations.
+            nsubs (int, optional): Number of subsets for ordered subsets acceleration. Defaults to 1.
+            psf (float, optional): Point spread function parameter.
+            denoiser (callable, optional): Denoising function that takes (image, sigma) as input.
+                If None, no denoising is applied.
+            sigma (float, optional): Noise level parameter for denoiser.
+            lambda_reg (float, optional): Regularization parameter balancing denoising and data fidelity.
+                Should be in [0, 1].
+            tau (float, optional): Step size parameter for the majorize-minimize update.
+        Returns:
+            tuple: A tuple containing:
+                - out (np.ndarray): Reconstructed image(s). Shape (H, W) for single image or
+                  (batch, H, W) for batch reconstruction.
+                - xs (list): List of intermediate image estimates at each subset iteration.
+                  Each element has shape (H, W).
+        Notes:
+            - The denoiser function is expected to work with normalized images and return
+              denoised images in the same format.
+            - Images are cropped to 128x128 for denoising and then placed back into original size.
+            - The algorithm uses a forward-divide-backward projection method for data consistency.
+            - Automatic batching support: single images are automatically batched and unbatched.
         """
         import time
 
+        xs = []
         tic = time.time()
 
         # --- Shapes / batching ---
-        if tof and not self.scanner.isTof:
-            raise ValueError("The scanner is not TOF")
         if np.ndim(prompts) == 2:  # (nr, na) -> add batch dim
             prompts = prompts[None, :, :]
-        elif np.ndim(prompts) == 3 and tof:  # (nr, na, ntof) -> add batch dim
-            prompts = prompts[None, :, :, :]
 
         batch_size = prompts.shape[0]
         H, W = self.image.matrixSize[:2]
@@ -2282,8 +2307,6 @@ class BuildGeometry_v4:
         # defaults for AN/RS
         if RS is None:
             dims = (batch_size, self.sinogram.nRadialBins, self.sinogram.nAngularBins)
-            if tof and self.scanner.isTof:
-                dims += (self.sinogram.nTofBins,)
             RS = np.zeros(dims, dtype=float)
 
         if AN is None:
@@ -2296,59 +2319,65 @@ class BuildGeometry_v4:
 
         # per-subset inverse sensitivity:  iSensImg[b, sub, nvox] = 1 / s_sub
         if iSensImg is None:
-            iSensImg = self.iSensImageBatch2D(
-                AN=AN, nsubs=nsubs, psf=psf
-            )  # returns (batch, nsubs, nvox)
+            iSensImg = self.iSensImageBatch2D(AN=AN, nsubs=nsubs, psf=psf)
         if np.ndim(iSensImg) == 2:
             iSensImg = iSensImg[None, :, :]
+
+        eps = 1e-24
 
         # denoiser wrapper (identity if None)
         def _denoise_batch(x_vec):
             # x_vec: (batch, nvox) -> returns (batch, nvox)
             x_imgs = x_vec.reshape((batch_size, H, W), order="F")
             x_imgs = torch.from_numpy(x_imgs).unsqueeze(1).to("cuda")
-            x_imgs = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
+            # Crop to 128x128 for denoising
+            h_orig, w_orig = x_imgs.shape[-2:]
+            crop_h, crop_w = 128, 128
+            start_h = (h_orig - crop_h) // 2
+            start_w = (w_orig - crop_w) // 2
+            x_imgs_cropped = x_imgs[
+                :, :, start_h : start_h + crop_h, start_w : start_w + crop_w
+            ]
 
-            if denoiser is None:
-                x_hat = x_imgs
-            else:
-                # support both batch-aware and per-image denoisers
-                try:
-                    x_hat = (
-                        denoiser(x_imgs, sigma)
-                        if sigma is not None
-                        else denoiser(x_imgs)
-                    )
-                except TypeError:
-                    x_hat = np.stack(
-                        [
-                            (
-                                denoiser(x_imgs[b], sigma)
-                                if sigma is not None
-                                else denoiser(x_imgs[b])
-                            )
-                            for b in range(batch_size)
-                        ],
-                        axis=0,
-                    )
-                x_hat = torch.clamp(x_hat, min=0)  # clamp to non-negative values
+            # Normalize the cropped image
+            x_imgs_cropped_norm = (x_imgs_cropped - x_imgs_cropped.min()) / (
+                x_imgs_cropped.max() - x_imgs_cropped.min() + 1e-8
+            )
+
+            # Denoise the cropped image
+            x_hat_cropped = denoiser(x_imgs_cropped_norm, sigma)
+            x_hat_cropped = torch.clamp(x_hat_cropped, min=eps)
+
+            # Denormalize the cropped denoised image
+            x_hat_cropped = (
+                x_hat_cropped * (x_imgs_cropped.max() - x_imgs_cropped.min())
+                + x_imgs_cropped.min()
+            )
+
+            # Put the denoised crop back into the original size
+            x_hat = x_imgs.clone()
+            x_hat[:, :, start_h : start_h + crop_h, start_w : start_w + crop_w] = (
+                x_hat_cropped
+            )
+            x_imgs_norm = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
+
+            # support both batch-aware and per-image denoisers
+            x_hat = denoiser(x_imgs_norm, sigma)
+            x_hat = torch.clamp(x_hat, min=eps)  # clamp to non-negative values
 
             # Denormalize the denoised image
-            x_hat = x_hat * (x_imgs.max() - x_imgs.min() + 1e-8) + x_imgs.min()
+            x_hat = x_hat * (x_imgs.max() - x_imgs.min()) + x_imgs.min()
             x_hat = x_hat.squeeze(1).cpu().detach().numpy()
             return x_hat.reshape((batch_size, nvox), order="F")
 
-        eps = 1e-8
-
         for it in range(niter):
-            # 1) denoiser-relaxation
-            x_deno = _denoise_batch(x)
-            x13 = (1.0 - lam * tau) * x + (lam * tau) * x_deno
 
-            # ordered-subset sweep: use the LATEST estimate for the ratio denominator
-            x_cur = x13.copy()
+            if it > 0:
+                x_deno = lambda_reg * _denoise_batch(x) + (1 - lambda_reg) * x_cur
+                x_cur = x_deno.copy()
+            else:
+                x_cur = x.copy()
             for sub in range(nsubs):
-                # use CURRENT image for Ax in the ratio y / (A x_cur + R)
                 back = self.forwardDivideBackwardBatch2D(
                     imgb=x_cur.reshape((batch_size, H, W), order="F"),
                     prompts=prompts,
@@ -2356,35 +2385,26 @@ class BuildGeometry_v4:
                     AN=AN,
                     nsubs=nsubs,
                     subset_i=sub,
-                    tof=tof,
+                    tof=False,
                     psf=psf,
-                )  # (batch, nvox)
+                )
 
                 inv_s = iSensImg[:, sub, :]  # = 1 / s_sub
                 s_sub = 1.0 / np.maximum(inv_s, eps)
 
-                # per your formula, x^{2/3} uses x^{1/3} (not x_cur)
-                x23 = (
-                    x13 * back
-                ) * inv_s  # (x^{1/3} / s_sub) * A^T[ y / (A x_cur + R) ]
+                a = x_cur - tau * s_sub
+                x_next = 0.5 * (a + np.sqrt((a * a) + 4.0 * tau * x_cur * back))
 
-                # quadratic per-subset update with s_sub
-                a = x13 - tau * s_sub
-                b = (a * a) + 4.0 * tau * s_sub * x23
-                x_next = 0.5 * (a + np.sqrt(np.maximum(b, 0.0)))
+                x_cur = x_next
 
-                if nonneg:
-                    x_next = np.maximum(x_next, 0.0)
-
-                x_cur = x_next  # advance within the sweep
-
+                xs.append(x_cur.reshape((H, W), order="F").copy())
             x = x_cur
 
         # --- reshape back to images ---
         out = x.reshape((batch_size, H, W), order="F")
         if batch_size == 1:
             out = out[0]
-        print(
-            f"{batch_size} batches reconstructed with PnP_EM2D in {time.time()-tic:.3f} s."
-        )
-        return out
+        # print(
+        #     f"{batch_size} batches reconstructed with PnP_EM2D in {time.time()-tic:.3f} s."
+        # )
+        return out, xs

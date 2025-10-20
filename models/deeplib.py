@@ -288,9 +288,21 @@ class DatasetPetMr_v2(Dataset):
         allow_pickle=True,
     ):
         """
-        filename = ['save_dir,'prefix']
-        num_train =number of traning datasets
-        set "has_gtruth=False" for invivo data
+        Initialize the dataset object.
+        Args:
+            filename (list): List containing ['save_dir', 'prefix'] for data files.
+            num_train (int): Number of training datasets.
+            transform (callable, optional): Optional transform to be applied on input data.
+                Defaults to None.
+            target_transform (callable, optional): Optional transform to be applied on targets.
+                Defaults to None.
+            is3d (bool, optional): Whether the data is 3D. Defaults to False.
+            imgLD_flname (str, optional): Image low-dose filename. Defaults to None.
+            crop_factor (int, optional): Factor for cropping operations. Defaults to 0.
+            allow_pickle (bool, optional): Whether to allow pickle for loading data.
+                Defaults to True.
+        Note:
+            Set "has_gtruth=False" for in vivo data without ground truth.
         """
         self.transform = transform
         self.target_transform = target_transform
