@@ -40,7 +40,7 @@ parser.add_argument(
 device = "cuda"
 temPath = r"./tmp"
 phanPath = r"../phantoms/Brainweb/"
-dataPath = r"./MoDL/valDatasets/brainweb/2D/"
+dataPath = r"./MoDL/testDatasets/brainweb/2D/"
 suffix = r"data-"
 radialBinCropFactor = 0.5
 
@@ -71,7 +71,7 @@ PET.loadSystemMatrix(temPath, is3d=False, tof=False)
 
 dataset = DatasetPetMr_v2(
     filename=[dataPath, suffix],
-    num_train=20,
+    num_train=100,
     transform=None,
     target_transform=None,
     is3d=False,
