@@ -1,3 +1,4 @@
+# %%
 import torch
 from deepinv.loss import PSNR
 from deepinv.loss.metric import MSE
@@ -18,7 +19,7 @@ import os
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-save_training_dir = r"./MoDL/trainingDatasets/brainweb/2D"
+save_training_dir = r"./MoDL/train/brainweb/2D"
 
 is3d = False
 temPath = r"./tmp/"
@@ -29,10 +30,10 @@ nsubs = 6
 training_flname = [save_training_dir + os.sep, "data-"]
 save_dir = r"./MoDL/output/brainweb/2D" + os.sep
 num_workers = 0
-batch_size = 16
+batch_size = 32
 test_size = 0.0
 valid_size = 0.1
-num_train = 500
+num_train = 1049
 
 
 # build PET object
@@ -42,10 +43,8 @@ PET.loadSystemMatrix(temPath, is3d=False)
 target_transform = transforms.Compose(
     [
         transforms.ToTensor(),
-        transforms.CenterCrop((128, 128)),
-        transforms.Lambda(
-            lambda x: (x - x.min()) / (x.max() - x.min() + 1e-6)
-        ),  # → [0,1]
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomRotation(45),
     ]
 )
 
@@ -59,6 +58,7 @@ train_loader, val_loader, test_loader = PETdatasetHD(
     valid_size=valid_size,
     num_workers=num_workers,
     target_transform=target_transform,
+    shuffle=True,
 )
 model = dinv.models.GSDRUNet(
     in_channels=1,
@@ -69,7 +69,7 @@ model = dinv.models.GSDRUNet(
 model.detach = False
 
 sigma_min = 0
-sigma_max = 50 / 255.0
+sigma_max = 40
 
 # Set up physics (e.g., denoising)
 physics = dinv.physics.Denoising(
@@ -92,6 +92,7 @@ optimizer = torch.optim.Adam(
     model.parameters(),
     lr=1e-4,
 )
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
 epochs = 500
 
 save_path = Path("weights/GSDRUNet-brainweb/")

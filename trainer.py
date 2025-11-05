@@ -786,8 +786,9 @@ class Trainer:
             )
             # Compute loss and perform backprop
             loss_cur, x_net, logs = self.compute_loss(
-                x,
-                y,
+                physics=physics_cur,
+                x=x,
+                y=y,
                 train=train,
                 epoch=epoch,
                 step=(not self.optimizer_step_multi_dataset),
