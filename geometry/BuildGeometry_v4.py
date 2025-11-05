@@ -1054,7 +1054,9 @@ class BuildGeometry_v4:
             N = len(self.sinogram.uniqueAxialPlanes)
             for i in range(N):
                 self.geoMatrix.append(
-                    np.load(save_dir + "geoMatrix-" + str(i) + ".npy")
+                    np.load(
+                        save_dir + "geoMatrix-" + str(i) + ".npy", allow_pickle=True
+                    )
                 )
                 if tof and self.scanner.isTof:
                     self.tofMatrix.append(

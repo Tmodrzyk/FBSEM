@@ -30,7 +30,7 @@ print("\nsinogram info:", PET.sinogram.as_dict())
 phanPath = r"./phantoms/Brainweb"
 save_training_dir = r"./MoDL/testDatasets/brainweb/2D"
 phanType = "brainweb"
-phanNumber = np.arange(5, 10, 1)  # use first brainweb phantoms 5-10 out of 20
+phanNumber = np.arange(19, 20, 1)  # Use last brainweb phantom
 
 buildBrainPhantomDataset(
     PET,
@@ -40,5 +40,7 @@ buildBrainPhantomDataset(
     phanNumber=phanNumber,
     is3d=False,
     num_rand_rotations=4,
-    slices_2d=np.arange(70, 80, 2),  # 5 middle slices are chosen (contain mostly brain)
+    slices_2d=np.arange(
+        30, 100, 2
+    ),  # 5 middle slices are chosen (contain mostly brain)
 )

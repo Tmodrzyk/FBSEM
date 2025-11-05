@@ -30,9 +30,9 @@ print("\nsinogram info:", PET.sinogram.as_dict())
 # LD/ld stands for low-definition low-dose, HD/hd stands for high-definition high-dose
 
 phanPath = r"./phantoms/Brainweb"
-save_training_dir = r"./MoDL/trainingDatasets/brainweb/2D"
+save_training_dir = r"./MoDL/train/brainweb/2D"
 phanType = "brainweb"
-phanNumber = np.arange(0, 5, 1)  # use first 5 brainweb phantoms out of 20
+phanNumber = np.arange(0, 19, 1)  # use first 5 brainweb phantoms out of 20
 
 buildBrainPhantomDataset(
     PET,
@@ -41,5 +41,10 @@ buildBrainPhantomDataset(
     phanType=phanType,
     phanNumber=phanNumber,
     is3d=False,
-    num_rand_rotations=5,
+    num_rand_rotations=1,
+    rot_angle_degrees=15,
+    psf_hd=0,
+    slices_2d=np.arange(30, 100, 1),
 )
+
+# %%
