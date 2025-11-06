@@ -76,7 +76,6 @@ y_ld, AF_ld, NF_ld, Randoms_ld = PET.simulateSinogramData(
 )
 
 # %%
-# %%
 # 2D OSEM
 AN_hd = AF_hd * NF_hd
 AN_ld = AF_ld * NF_ld
@@ -106,49 +105,12 @@ fbsem_ld = fbsemInference(
 
 
 # %%
-iter_pnpmm = 50
-# pretrained_path = pathlib.Path("./weights/25-10-13-14:12:28/ckp_best.pth.tar")
+pretrained_path = pathlib.Path(
+    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-05-15:09:25/ckp_best.pth.tar"
+)
 denoiser = dinv.models.GSDRUNet(
-    in_channels=1, out_channels=1, pretrained="download"
+    in_channels=1, out_channels=1, pretrained=pretrained_path
 ).to("cuda")
-
-sigma_denoiser_ld = 5 / 255.0
-lambda_reg_ld = 0.3
-stepsize_ld = 1e3
-
-
-def normalize_osem_image(x_osem, quantile=0.01):
-    """
-    PET-specific sampling normalization using OSEM reconstruction.
-    Computes c_OSEM = sum(x_osem) / count(x_osem > Q_0.01)
-    and scales the image accordingly.
-
-    Args:
-        x_osem (torch.Tensor): reconstructed image, shape (B, C, H, W) or (B, 1, D, H, W)
-        quantile (float): quantile used for thresholding (default 0.01 → 1%)
-
-    Returns:
-        x_norm (torch.Tensor): normalized image
-        c_osem (torch.Tensor): normalization factor per image
-    """
-    B = x_osem.shape[0]
-    spatial_dims = list(range(1, x_osem.ndim))
-
-    c_osem = []
-    x_norm = torch.empty_like(x_osem)
-
-    for b in range(B):
-        x = x_osem[b]
-        q = torch.quantile(x, quantile)  # compute Q_0.01
-        mask = x > q
-        numerator = x.sum()
-        denominator = mask.sum()
-        c = numerator / (denominator + 1e-8)
-        x_norm[b] = x / (c + 1e-8)
-        c_osem.append(c)
-
-    c_osem = torch.stack(c_osem).view(B, *([1] * (x_osem.ndim - 1)))
-    return x_norm, c_osem
 
 
 def PnP_MM2D(
@@ -206,129 +168,156 @@ def PnP_MM2D(
         - Automatic batching support: single images are automatically batched and unbatched.
     """
     import time
+    import numpy as np
 
-    xs = []
+    # --- inputs assumed: PET, prompts, AN, RS, img (optional), niter, nsubs, tau, psf, s (optional)
+    # SensImg is built below; if you prefer a custom s, pass it and skip SensImg in the update.
+
     tic = time.time()
+    [numAng, subSize] = PET.angular_subsets(nsubs)
 
-    # --- Shapes / batching ---
-    if np.ndim(prompts) == 2:  # (nr, na) -> add batch dim
+    # --- Batch handling (fix: only add ONE batch dimension if 2D)
+    if np.ndim(prompts) == 2:  # (R, A) -> (1, R, A)
+        batch_size = 1
         prompts = prompts[None, :, :]
-
-    batch_size = prompts.shape[0]
-    H, W = PET.image.matrixSize[:2]
-    nvox = H * W
-
-    # init image
-    if img is None:
-        x = np.ones((batch_size, nvox), dtype=float)
     else:
-        if np.ndim(img) == 2:
-            img = img[None, :, :]
-        x = img.reshape((batch_size, nvox), order="F").astype(float)
+        batch_size = prompts.shape[0]
 
-    # defaults for AN/RS
+    # image buffer
+    if img is None:
+        img = np.ones([batch_size, np.prod(PET.image.matrixSize[:2])], dtype=float)
+    else:
+        if batch_size > 1 and img.shape[0] != batch_size:
+            raise ValueError("1st img dimension doesn't match batch_size")
+    nVoxls = np.prod(PET.image.matrixSize[:2])
+    img = np.reshape(img, [batch_size, nVoxls], order="F")
+
+    # RS / AN shapes
     if RS is None:
-        dims = (batch_size, PET.sinogram.nRadialBins, PET.sinogram.nAngularBins)
-        RS = np.zeros(dims, dtype=float)
-
+        RS = np.zeros_like(prompts, dtype=float)
     if AN is None:
         AN = np.ones(
-            (batch_size, PET.sinogram.nRadialBins, PET.sinogram.nAngularBins),
+            [batch_size, PET.sinogram.nRadialBins, PET.sinogram.nAngularBins],
             dtype=float,
         )
     elif np.ndim(AN) == 2:
         AN = AN[None, :, :]
 
-    # per-subset inverse sensitivity:  iSensImg[b, sub, nvox] = 1 / s_sub
-    if iSensImg is None:
-        iSensImg = PET.iSensImageBatch2D(AN=AN, nsubs=nsubs, psf=psf)
-    if np.ndim(iSensImg) == 2:
-        iSensImg = iSensImg[None, :, :]
+    # Sensitivity images (per subset). Use this in the sqrt step (as "s").
+    SensImg = PET.SensImageBatch2D(AN, nsubs, psf)  # (B, nsubs, Nvox)
+    if SensImg.ndim == 2:
+        SensImg = SensImg[None, :, :]
+    matrixSize = PET.image.matrixSize
+    q = PET.sinogram.nAngularBins // 2
 
-    eps = 1e-24
+    # Per-subset stepsize (optional but common)
+    # tau_sub = tau / float(nsubs)
+    tau_sub = tau
 
-    # denoiser wrapper (identity if None)
-    def _denoise_batch(x_vec):
-        # x_vec: (batch, nvox) -> returns (batch, nvox)
-        x_imgs = x_vec.reshape((batch_size, H, W), order="F")
-        x_imgs = torch.from_numpy(x_imgs).unsqueeze(1).to("cuda")
-        # Crop to 128x128 for denoising
-        h_orig, w_orig = x_imgs.shape[-2:]
-        crop_h, crop_w = 128, 128
-        start_h = (h_orig - crop_h) // 2
-        start_w = (w_orig - crop_w) // 2
-        x_imgs_cropped = x_imgs[
-            :, :, start_h : start_h + crop_h, start_w : start_w + crop_w
-        ]
+    eps_div = 1e-5
+    eps_sqrt = 0.0  # bump slightly if roundoff causes tiny negatives
+    xs = []  # store intermediate images
 
-        # Normalize the cropped image
-        x_imgs_cropped_norm, c_osem = normalize_osem_image(x_imgs_cropped)
-        dinv.utils.plot(x_imgs_cropped_norm, cmap="gist_gray_r", show=True)
+    for n in range(niter):
+        print(f"Iter {n+1}/{niter}", end="\r")
 
-        # Denoise the cropped image
-        x_hat_cropped = denoiser(x_imgs_cropped_norm, sigma)
-        x_hat_cropped = torch.clamp(x_hat_cropped, min=eps)
-
-        # Denormalize the cropped denoised image
-        x_hat_cropped = (
-            x_hat_cropped * (x_imgs_cropped.max() - x_imgs_cropped.min())
-            + x_imgs_cropped.min()
-        )
-
-        # Put the denoised crop back into the original size
-        x_hat = x_imgs.clone()
-        x_hat[:, :, start_h : start_h + crop_h, start_w : start_w + crop_w] = (
-            x_hat_cropped
-        )
-        x_imgs_norm = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
-
-        # support both batch-aware and per-image denoisers
-        x_hat = denoiser(x_imgs_norm, sigma)
-        x_hat = torch.clamp(x_hat, min=eps)  # clamp to non-negative values
-
-        # Denormalize the denoised image
-        # x_hat *= c_osem
-        return x_hat.reshape((batch_size, nvox)).detach().cpu().numpy()
-
-    for it in range(niter):
-
-        if it > 0:
-            x_deno = lambda_reg * _denoise_batch(x) + (1 - lambda_reg) * x_cur
-            x_cur = x_deno.copy()
-        else:
-            x_cur = x.copy()
         for sub in range(nsubs):
-            back = PET.forwardDivideBackwardBatch2D(
-                imgb=x_cur.reshape((batch_size, H, W), order="F"),
-                prompts=prompts,
-                RS=RS,
-                AN=AN,
-                nsubs=nsubs,
-                subset_i=sub,
-                tof=False,
-                psf=psf,
-            )
 
-            inv_s = iSensImg[:, sub, :]  # = 1 / s_sub
-            s_sub = 1.0 / np.maximum(inv_s, eps)
+            # Pre-blur image for the forward model A(H x)
+            img_ = img.copy()
+            if np.any(psf != 0):
+                for b in range(batch_size):
+                    img_[b, :] = PET.gaussFilter(img_[b, :], psf)
 
-            a = x_cur - tau * s_sub
-            x_next = 0.5 * (a + np.sqrt((a * a) + 4.0 * tau * x_cur * back))
+            # Ratio backprojection accumulator: A_S^T( AN * y / (AN*A(Hx) + RS) )
+            backProjImage = np.zeros_like(img_)  # (B, Nvox)
+            # Iterate over angles in this subset
+            for ii in range(subSize // 2):
+                i = numAng[ii, sub]
 
-            x_cur = x_next
+                # Radial bins
+                for j in range(PET.sinogram.nRadialBins):
+                    M0 = PET.geoMatrix[0][i, j]
+                    if np.isscalar(M0):
+                        continue
 
-            xs.append(x_cur.reshape((H, W), order="F").copy())
-        x = x_cur
+                    # Ensure proper 2D array: each row = [x, y, ?, weight]
+                    A = np.asarray(M0)
+                    if A.ndim != 2 or A.shape[1] < 4:
+                        raise ValueError(
+                            f"Malformed geoMatrix entry at angle={i}, bin={j}: shape={A.shape}"
+                        )
 
-    # --- reshape back to images ---
-    out = x.reshape((batch_size, H, W), order="F")
+                    voxel_coords = A[:, 0:3].astype(np.int32)  # (nseg, 3)
+                    geom_weights = A[:, 3].astype(np.float64) / 1e4  # (nseg,)
+
+                    # Flattened voxel indices for (i, j) and its symmetric partner (i+q, j)
+                    x, y = voxel_coords[:, 0], voxel_coords[:, 1]
+                    idx1 = x + y * matrixSize[0]
+                    idx2 = y + matrixSize[0] * (matrixSize[0] - 1 - x)
+
+                    # Strict length consistency — if these fail, geometry is mismatched upstream
+                    nseg = geom_weights.shape[0]
+                    if idx1.shape[0] != nseg or idx2.shape[0] != nseg:
+                        raise ValueError(
+                            f"geo mismatch at angle={i}, bin={j}: "
+                            f"len(weights)={nseg}, len(idx1)={idx1.shape[0]}, len(idx2)={idx2.shape[0]}"
+                        )
+
+                    for b in range(batch_size):
+                        # forward predictions
+                        fwd1 = geom_weights.dot(img_[b, idx1])
+                        fwd2 = geom_weights.dot(img_[b, idx2])
+
+                        den1 = AN[b, j, i] * fwd1 + RS[b, j, i] + eps_div
+                        den2 = AN[b, j, i + q] * fwd2 + RS[b, j, i + q] + eps_div
+
+                        ratio1 = prompts[b, j, i] / den1
+                        ratio2 = prompts[b, j, i + q] / den2
+
+                        # Accumulate with np.add.at (robust to duplicate indices)
+                        np.add.at(
+                            backProjImage[b], idx1, geom_weights * AN[b, j, i] * ratio1
+                        )
+                        np.add.at(
+                            backProjImage[b],
+                            idx2,
+                            geom_weights * AN[b, j, i + q] * ratio2,
+                        )
+
+            # If SensImageBatch2D already includes PSF adjoint, leave the next block off.
+            # If it doesn't, uncomment to keep projector/backprojector matched (Gaussian ~ self-adjoint).
+            if np.any(psf != 0):
+                for b in range(batch_size):
+                    backProjImage[b, :] = PET.gaussFilter(backProjImage[b, :], psf)
+
+            # Half-step: x^(n+1/2) = x^n * A_S^T( AN * y / (AN*A(Hx^n) + RS) )
+            x_half = img * backProjImage
+
+            # Quadratic/sqrt step:
+            # x^{n+1} = 0.5 * [ (x^n - tau_sub * s) + sqrt( (x^n - tau_sub * s)^2 + 4 * tau_sub * x_half ) ]
+            # Here we use s = SensImg[:, sub, :] (shape (B, Nvox)), as per your request.
+            s_vec = SensImg[:, sub, :]  # per-subset sensitivity image
+            tmp = img - tau_sub * s_vec
+            img = 0.5 * (tmp + np.sqrt(tmp * tmp + 4.0 * tau_sub * x_half + eps_sqrt))
+
+            xs.append(np.reshape(img[0, :], matrixSize[:2], order="F"))
+            dinv.utils.plot(torch.from_numpy(xs[-1]).unsqueeze(0).unsqueeze(0))
+    # Reshape back to (B, H, W)
+    img = np.reshape(img, [batch_size, matrixSize[0], matrixSize[1]], order="F")
     if batch_size == 1:
-        out = out[0]
-    # print(
-    #     f"{batch_size} batches reconstructed with PnP_EM2D in {time.time()-tic:.3f} s."
-    # )
-    return out, xs
+        img = img[0, :, :]
 
+    print(f"{batch_size} batches reconstructed in: {(time.time()-tic):.3f} sec.")
+    return img, xs
+
+
+psf_ld = 0.4
+nsubs_ld = 14
+iter_pnpmm = 15
+sigma_denoiser_ld = 10
+lambda_reg_ld = 0.0
+stepsize_ld = 10
 
 pnp_mm_ld, xs = PnP_MM2D(
     PET,
@@ -338,7 +327,7 @@ pnp_mm_ld, xs = PnP_MM2D(
     AN=AN_ld,
     iSensImg=None,
     niter=iter_pnpmm,
-    nsubs=1,
+    nsubs=14,
     psf=psf_ld,
     denoiser=denoiser,
     sigma=sigma_denoiser_ld,
@@ -346,8 +335,6 @@ pnp_mm_ld, xs = PnP_MM2D(
     tau=stepsize_ld,
 )
 
-
-# %%
 # Center crop the images first
 from matplotlib import colors
 
