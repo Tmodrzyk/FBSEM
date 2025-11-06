@@ -1,6 +1,6 @@
 """
 Created on May 2019
-PET image reconstruction library
+self image reconstruction library
 
 
 @author: Abi Mehranian
@@ -1029,8 +1029,8 @@ class BuildGeometry_v4:
 
         """
         if case usage of: 
-            PET = BuildGeometry('mct') 
-            PET.loadSystemMatrix(save_dir)
+            self = BuildGeometry('mct') 
+            self.loadSystemMatrix(save_dir)
             call "self.Lors3DEndPointCoor(1)" internally to set sinogram attributes 
         """
         self.is3d = is3d
@@ -1568,6 +1568,59 @@ class BuildGeometry_v4:
         if batch_size == 1:
             iSensImageSubBatch = iSensImageSubBatch[0, :, :]
         return iSensImageSubBatch
+
+    def SensImageBatch2D(self, AN=None, nsubs=1, psf=0):
+        if AN is None:
+            batch_size = 1
+            AN = np.ones(
+                [batch_size, self.sinogram.nRadialBins, self.sinogram.nAngularBins],
+                dtype="float",
+            )
+        else:
+            if np.ndim(AN) == 2:
+                AN = AN[None, :, :]
+            batch_size = AN.shape[0]
+
+        sensImageSubBatch = np.zeros(
+            [batch_size, nsubs, self.image.matrixSize[0] * self.image.matrixSize[1]],
+            dtype="float",
+        )
+        sensImage = np.zeros(
+            [batch_size, np.prod(self.image.matrixSize[:2])], dtype="float"
+        )
+        matrixSize = self.image.matrixSize
+        q = self.sinogram.nAngularBins // 2
+        [numAng, subSize] = self.angular_subsets(nsubs)
+
+        for sub in range(nsubs):
+            sensImage = 0 * sensImage
+            for ii in range(subSize // 2):
+                i = numAng[ii, sub]
+                for j in range(self.sinogram.nRadialBins):
+                    M0 = self.geoMatrix[0][i, j]
+                    if not np.isscalar(M0):
+                        M = M0[:, 0:3].astype("int32")
+                        G = M0[:, 3] / 1e4
+                        idx1 = M[:, 0] + M[:, 1] * matrixSize[0]
+                        idx2 = M[:, 1] + matrixSize[0] * (matrixSize[0] - 1 - M[:, 0])
+
+                        if self.scanner.isTof:
+                            W = self.tofMatrix[0][i, j] / 1e4
+                            GW = G * np.sum(W, axis=1)
+                            for b in range(batch_size):
+                                sensImage[b, idx1] += GW * AN[b, j, i]
+                                sensImage[b, idx2] += GW * AN[b, j, i + q]
+                        else:
+                            for b in range(batch_size):
+                                sensImage[b, idx1] += G * AN[b, j, i]
+                                sensImage[b, idx2] += G * AN[b, j, i + q]
+            for b in range(batch_size):
+                sensImageSubBatch[b, sub, :] = (
+                    self.gaussFilter(sensImage[b, :], psf) * self.mask_fov()
+                )
+        if batch_size == 1:
+            sensImageSubBatch = sensImageSubBatch[0, :, :]
+        return sensImageSubBatch
 
     # RS: randoms+scatter
     # AN: attenuation normalization
@@ -2253,7 +2306,7 @@ class BuildGeometry_v4:
         algorithm alternates between denoising steps and data consistency updates.
         Only works for one subset.
         Args:
-            PET: PET system object containing geometry and reconstruction methods
+            self: PET system object containing geometry and reconstruction methods
             prompts (np.ndarray): Prompt sinogram data. Shape can be (nr, na) or (batch, nr, na)
             img (np.ndarray, optional): Initial image estimate. If None, initializes to ones.
                 Shape can be (H, W) or (batch, H, W).
@@ -2275,138 +2328,200 @@ class BuildGeometry_v4:
         Returns:
             tuple: A tuple containing:
                 - out (np.ndarray): Reconstructed image(s). Shape (H, W) for single image or
-                  (batch, H, W) for batch reconstruction.
+                (batch, H, W) for batch reconstruction.
                 - xs (list): List of intermediate image estimates at each subset iteration.
-                  Each element has shape (H, W).
+                Each element has shape (H, W).
         Notes:
             - The denoiser function is expected to work with normalized images and return
-              denoised images in the same format.
+            denoised images in the same format.
             - Images are cropped to 128x128 for denoising and then placed back into original size.
             - The algorithm uses a forward-divide-backward projection method for data consistency.
             - Automatic batching support: single images are automatically batched and unbatched.
         """
         import time
+        import numpy as np
 
-        xs = []
+        # --- inputs assumed: self, prompts, AN, RS, img (optional), niter, nsubs, tau, psf, s (optional)
+        # SensImg is built below; if you prefer a custom s, pass it and skip SensImg in the update.
+
         tic = time.time()
+        [numAng, subSize] = self.angular_subsets(nsubs)
 
-        # --- Shapes / batching ---
-        if np.ndim(prompts) == 2:  # (nr, na) -> add batch dim
+        # --- Batch handling (fix: only add ONE batch dimension if 2D)
+        if np.ndim(prompts) == 2:  # (R, A) -> (1, R, A)
+            batch_size = 1
             prompts = prompts[None, :, :]
-
-        batch_size = prompts.shape[0]
-        H, W = self.image.matrixSize[:2]
-        nvox = H * W
-
-        # init image
-        if img is None:
-            x = np.ones((batch_size, nvox), dtype=float)
         else:
-            if np.ndim(img) == 2:
-                img = img[None, :, :]
-            x = img.reshape((batch_size, nvox), order="F").astype(float)
+            batch_size = prompts.shape[0]
 
-        # defaults for AN/RS
+        # image buffer
+        if img is None:
+            img = np.ones([batch_size, np.prod(self.image.matrixSize[:2])], dtype=float)
+        else:
+            if batch_size > 1 and img.shape[0] != batch_size:
+                raise ValueError("1st img dimension doesn't match batch_size")
+        nVoxls = np.prod(self.image.matrixSize[:2])
+        img = np.reshape(img, [batch_size, nVoxls], order="F")
+
+        # RS / AN shapes
         if RS is None:
-            dims = (batch_size, self.sinogram.nRadialBins, self.sinogram.nAngularBins)
-            RS = np.zeros(dims, dtype=float)
-
+            RS = np.zeros_like(prompts, dtype=float)
         if AN is None:
             AN = np.ones(
-                (batch_size, self.sinogram.nRadialBins, self.sinogram.nAngularBins),
+                [batch_size, self.sinogram.nRadialBins, self.sinogram.nAngularBins],
                 dtype=float,
             )
         elif np.ndim(AN) == 2:
             AN = AN[None, :, :]
 
-        # per-subset inverse sensitivity:  iSensImg[b, sub, nvox] = 1 / s_sub
-        if iSensImg is None:
-            iSensImg = self.iSensImageBatch2D(AN=AN, nsubs=nsubs, psf=psf)
-        if np.ndim(iSensImg) == 2:
-            iSensImg = iSensImg[None, :, :]
+        # Sensitivity images (per subset). Use this in the sqrt step (as "s").
+        SensImg = self.SensImageBatch2D(AN, nsubs, psf)  # (B, nsubs, Nvox)
+        if SensImg.ndim == 2:
+            SensImg = SensImg[None, :, :]
+        matrixSize = self.image.matrixSize
+        q = self.sinogram.nAngularBins // 2
 
-        eps = 1e-24
+        # Per-subset stepsize (optional but common)
+        # tau_sub = tau / float(nsubs)
+        tau_sub = tau
 
-        # denoiser wrapper (identity if None)
-        def _denoise_batch(x_vec):
-            # x_vec: (batch, nvox) -> returns (batch, nvox)
-            x_imgs = x_vec.reshape((batch_size, H, W), order="F")
-            x_imgs = torch.from_numpy(x_imgs).unsqueeze(1).to("cuda")
-            # Crop to 128x128 for denoising
-            h_orig, w_orig = x_imgs.shape[-2:]
-            crop_h, crop_w = 128, 128
-            start_h = (h_orig - crop_h) // 2
-            start_w = (w_orig - crop_w) // 2
-            x_imgs_cropped = x_imgs[
-                :, :, start_h : start_h + crop_h, start_w : start_w + crop_w
-            ]
+        eps_div = 1e-5
+        eps_sqrt = 0.0  # bump slightly if roundoff causes tiny negatives
+        xs = []  # store intermediate images
 
-            # Normalize the cropped image
-            x_imgs_cropped_norm = (x_imgs_cropped - x_imgs_cropped.min()) / (
-                x_imgs_cropped.max() - x_imgs_cropped.min() + 1e-8
-            )
+        for n in range(niter):
+            print(f"Iter {n+1}/{niter}", end="\r")
 
-            # Denoise the cropped image
-            x_hat_cropped = denoiser(x_imgs_cropped_norm, sigma)
-            x_hat_cropped = torch.clamp(x_hat_cropped, min=eps)
-
-            # Denormalize the cropped denoised image
-            x_hat_cropped = (
-                x_hat_cropped * (x_imgs_cropped.max() - x_imgs_cropped.min())
-                + x_imgs_cropped.min()
-            )
-
-            # Put the denoised crop back into the original size
-            x_hat = x_imgs.clone()
-            x_hat[:, :, start_h : start_h + crop_h, start_w : start_w + crop_w] = (
-                x_hat_cropped
-            )
-            x_imgs_norm = (x_imgs - x_imgs.min()) / (x_imgs.max() - x_imgs.min() + 1e-8)
-
-            # support both batch-aware and per-image denoisers
-            x_hat = denoiser(x_imgs_norm, sigma)
-            x_hat = torch.clamp(x_hat, min=eps)  # clamp to non-negative values
-
-            # Denormalize the denoised image
-            x_hat = x_hat * (x_imgs.max() - x_imgs.min()) + x_imgs.min()
-            x_hat = x_hat.squeeze(1).cpu().detach().numpy()
-            return x_hat.reshape((batch_size, nvox), order="F")
-
-        for it in range(niter):
-
-            if it > 0:
-                x_deno = lambda_reg * _denoise_batch(x) + (1 - lambda_reg) * x_cur
-                x_cur = x_deno.copy()
-            else:
-                x_cur = x.copy()
             for sub in range(nsubs):
-                back = self.forwardDivideBackwardBatch2D(
-                    imgb=x_cur.reshape((batch_size, H, W), order="F"),
-                    prompts=prompts,
-                    RS=RS,
-                    AN=AN,
-                    nsubs=nsubs,
-                    subset_i=sub,
-                    tof=False,
-                    psf=psf,
+
+                # Pre-blur image for the forward model A(H x)
+                img_ = img.copy()
+                if np.any(psf != 0):
+                    for b in range(batch_size):
+                        img_[b, :] = self.gaussFilter(img_[b, :], psf)
+
+                # Ratio backprojection accumulator: A_S^T( AN * y / (AN*A(Hx) + RS) )
+                backProjImage = np.zeros_like(img_)  # (B, Nvox)
+                # Iterate over angles in this subset
+                for ii in range(subSize // 2):
+                    i = numAng[ii, sub]
+
+                    # Radial bins
+                    for j in range(self.sinogram.nRadialBins):
+                        M0 = self.geoMatrix[0][i, j]
+                        if np.isscalar(M0):
+                            continue
+
+                        # Ensure proper 2D array: each row = [x, y, ?, weight]
+                        A = np.asarray(M0)
+                        if A.ndim != 2 or A.shape[1] < 4:
+                            raise ValueError(
+                                f"Malformed geoMatrix entry at angle={i}, bin={j}: shape={A.shape}"
+                            )
+
+                        voxel_coords = A[:, 0:3].astype(np.int32)  # (nseg, 3)
+                        geom_weights = A[:, 3].astype(np.float64) / 1e4  # (nseg,)
+
+                        # Flattened voxel indices for (i, j) and its symmetric partner (i+q, j)
+                        x, y = voxel_coords[:, 0], voxel_coords[:, 1]
+                        idx1 = x + y * matrixSize[0]
+                        idx2 = y + matrixSize[0] * (matrixSize[0] - 1 - x)
+
+                        # Strict length consistency — if these fail, geometry is mismatched upstream
+                        nseg = geom_weights.shape[0]
+                        if idx1.shape[0] != nseg or idx2.shape[0] != nseg:
+                            raise ValueError(
+                                f"geo mismatch at angle={i}, bin={j}: "
+                                f"len(weights)={nseg}, len(idx1)={idx1.shape[0]}, len(idx2)={idx2.shape[0]}"
+                            )
+
+                        for b in range(batch_size):
+                            # forward predictions
+                            fwd1 = geom_weights.dot(img_[b, idx1])
+                            fwd2 = geom_weights.dot(img_[b, idx2])
+
+                            den1 = AN[b, j, i] * fwd1 + RS[b, j, i] + eps_div
+                            den2 = AN[b, j, i + q] * fwd2 + RS[b, j, i + q] + eps_div
+
+                            ratio1 = prompts[b, j, i] / den1
+                            ratio2 = prompts[b, j, i + q] / den2
+
+                            # Accumulate with np.add.at (robust to duplicate indices)
+                            np.add.at(
+                                backProjImage[b],
+                                idx1,
+                                geom_weights * AN[b, j, i] * ratio1,
+                            )
+                            np.add.at(
+                                backProjImage[b],
+                                idx2,
+                                geom_weights * AN[b, j, i + q] * ratio2,
+                            )
+
+                # If SensImageBatch2D already includes PSF adjoint, leave the next block off.
+                # If it doesn't, uncomment to keep projector/backprojector matched (Gaussian ~ self-adjoint).
+                if np.any(psf != 0):
+                    for b in range(batch_size):
+                        backProjImage[b, :] = self.gaussFilter(backProjImage[b, :], psf)
+
+                # Half-step: x^(n+1/2) = x^n * A_S^T( AN * y / (AN*A(Hx^n) + RS) )
+                x_half = img * backProjImage
+
+                # Quadratic/sqrt step:
+                # x^{n+1} = 0.5 * [ (x^n - tau_sub * s) + sqrt( (x^n - tau_sub * s)^2 + 4 * tau_sub * x_half ) ]
+                # Here we use s = SensImg[:, sub, :] (shape (B, Nvox)), as per your request.
+                s_vec = SensImg[:, sub, :]  # per-subset sensitivity image
+                tmp = img - tau_sub * s_vec
+                img = 0.5 * (
+                    tmp + np.sqrt(tmp * tmp + 4.0 * tau_sub * x_half + eps_sqrt)
                 )
+            xs.append(np.reshape(img[0, :], matrixSize[:2], order="F"))
 
-                inv_s = iSensImg[:, sub, :]  # = 1 / s_sub
-                s_sub = 1.0 / np.maximum(inv_s, eps)
+            if denoiser is not None and n < niter - 1:
+                # Center crop to 128x128 for denoising
+                def crop2d(img, crop_size):
+                    h, w = img.shape[-2:]
+                    start_h = (h - crop_size) // 2
+                    start_w = (w - crop_size) // 2
+                    return img[
+                        ...,
+                        start_h : start_h + crop_size,
+                        start_w : start_w + crop_size,
+                    ]
 
-                a = x_cur - tau * s_sub
-                x_next = 0.5 * (a + np.sqrt((a * a) + 4.0 * tau * x_cur * back))
+                def uncrop2d(cropped, orig_shape):
+                    h, w = orig_shape
+                    out = np.zeros((cropped.shape[0], h, w), dtype=cropped.dtype)
+                    start_h = (h - cropped.shape[1]) // 2
+                    start_w = (w - cropped.shape[2]) // 2
+                    out[
+                        :,
+                        start_h : start_h + cropped.shape[1],
+                        start_w : start_w + cropped.shape[2],
+                    ] = cropped
+                    return out
 
-                x_cur = x_next
+                crop_size = 128
+                img_hw = np.reshape(
+                    img, (batch_size, matrixSize[0], matrixSize[1]), order="F"
+                )
+                img_crop = crop2d(img_hw, crop_size)
+                t_img = torch.from_numpy(img_crop).float().unsqueeze(1).to("cuda")
+                # dinv.utils.plot(t_img, cmap="gist_gray_r")
 
-                xs.append(x_cur.reshape((H, W), order="F").copy())
-            x = x_cur
+                with torch.no_grad():
+                    t_deno = denoiser(t_img, sigma).clamp(min=0.0)
+                deno_crop = t_deno.squeeze(1).detach().cpu().numpy()
+                # Blend cropped denoised output with cropped input
+                img_crop = (1.0 - lambda_reg) * img_crop + lambda_reg * deno_crop
+                # Uncrop back to original image size
+                img_hw = uncrop2d(img_crop, (matrixSize[0], matrixSize[1]))
+                img = img_hw.reshape(batch_size, -1, order="F")
 
-        # --- reshape back to images ---
-        out = x.reshape((batch_size, H, W), order="F")
+        # Reshape back to (B, H, W)
+        img = np.reshape(img, [batch_size, matrixSize[0], matrixSize[1]], order="F")
         if batch_size == 1:
-            out = out[0]
-        # print(
-        #     f"{batch_size} batches reconstructed with PnP_EM2D in {time.time()-tic:.3f} s."
-        # )
-        return out, xs
+            img = img[0, :, :]
+
+        print(f"{batch_size} batches reconstructed in: {(time.time()-tic):.3f} sec.")
+        return img, xs
