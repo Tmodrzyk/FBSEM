@@ -233,33 +233,33 @@ def buildBrainPhantomDataset(
                 prompts_hd, AF, NF, _ = PET.simulateSinogramData(
                     imgr, mumap=mumapr, counts=counts_hd, psf=psf_hd
                 )
-                # print("* simulate LD 2D sinograms...")
-                # prompts_ld, _, _, _ = PET.simulateSinogramData(
-                #     imgr, AF=AF, NF=NF, counts=counts_ld, psf=psf_ld
-                # )
+                print("* simulate LD 2D sinograms...")
+                prompts_ld, _, _, _ = PET.simulateSinogramData(
+                    imgr, AF=AF, NF=NF, counts=counts_ld, psf=psf_ld
+                )
                 AN = AF * NF
                 print("* reconstruct HD 2D sinograms...")
                 img_hd = PET.OSEM2D(
                     prompts_hd, AN=AN, niter=niter_hd, nsubs=nsubs_hd, psf=psf_hd
                 )
-                # print("* reconstruct LD 2D sinograms...")
-                # img_ld = PET.OSEM2D(
-                #     prompts_ld, AN=AN, niter=niter_ld, nsubs=nsubs_ld, psf=psf_hd
-                # # )
-                # print("* reconstruct LD+psf 2D sinograms...")
-                # img_ld_psf = PET.OSEM2D(
-                #     prompts_ld, AN=AN, niter=niter_ld, nsubs=nsubs_ld, psf=psf_ld
-                # )
+                print("* reconstruct LD 2D sinograms...")
+                img_ld = PET.OSEM2D(
+                    prompts_ld, AN=AN, niter=niter_ld, nsubs=nsubs_ld, psf=psf_hd
+                )
+                print("* reconstruct LD+psf 2D sinograms...")
+                img_ld_psf = PET.OSEM2D(
+                    prompts_ld, AN=AN, niter=niter_ld, nsubs=nsubs_ld, psf=psf_ld
+                )
                 print("* save datasets...")
                 for k in range(num_slices):
-                    # dset["sinoLD"] = prompts_ld[k, :, :]
-                    # dset["imgLD"] = img_ld[k, :, :]
-                    # dset["imgLD_psf"] = img_ld_psf[k, :, :]
+                    dset["sinoLD"] = prompts_ld[k, :, :]
+                    dset["imgLD"] = img_ld[k, :, :]
+                    dset["imgLD_psf"] = img_ld_psf[k, :, :]
                     dset["imgHD"] = img_hd[k, :, :]
-                    # dset["AN"] = AN[k, :, :]
+                    dset["AN"] = AN[k, :, :]
                     dset["imgGT"] = imgr[k, :, :]
-                    # dset["mrImg"] = t1r[k, :, :]
-                    # dset["counts"] = counts_ld
+                    dset["mrImg"] = t1r[k, :, :]
+                    dset["counts"] = counts_ld
 
                     flname = save_training_dir + bar + "data-"
                     while os.path.isfile(flname + str(f) + ".npy"):
