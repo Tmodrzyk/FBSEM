@@ -1,11 +1,11 @@
 #!/bin/bash
-#PBS -N gsdrunet_brainweb_2d
+#PBS -N train_gsdrunet_brainweb
 #PBS -l nodes=1:ppn=12:gpus=1
 #PBS -q gpu
 #PBS -l mem=64gb
 #PBS -l walltime=12:00:00
-#PBS -o brainweb_dataset.o
-#PBS -e brainweb_dataset.err
+#PBS -o train_gsdrunet_brainweb.o
+#PBS -e train_gsdrunet_brainweb.err
 #PBS -m ae
 #PBS -M thibaut.modrzyk@creatis.insa-lyon.fr
 set -e

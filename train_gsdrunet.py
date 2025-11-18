@@ -32,7 +32,8 @@ num_workers = 0
 batch_size = 32
 test_size = 0.0
 valid_size = 0.1
-num_train = 1049
+# num_train = 1049
+num_train = 450
 
 
 # build PET object
