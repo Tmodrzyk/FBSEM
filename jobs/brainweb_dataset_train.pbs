@@ -12,4 +12,4 @@ set -e
 cd "${PBS_O_WORKDIR}"
 hostname
 source .venv/bin/activate
-python build_training_sets.py
+python build_train_sets.py
