@@ -1,4 +1,3 @@
-# %%
 import torch
 from deepinv.loss import PSNR
 from deepinv.loss.metric import MSE
@@ -19,7 +18,7 @@ import os
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-save_training_dir = r"./MoDL/train/brainweb/2D"
+save_training_dir = r"./MoDL/trainFBSEM/brainweb/2D"
 
 is3d = False
 temPath = r"./tmp/"
