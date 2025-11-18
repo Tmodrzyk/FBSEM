@@ -84,15 +84,31 @@ map_em_ld = PET.mrMAPEM2DBatch(
     nsubs=6,
     psf=psf_ld,
 ).squeeze()
+
+# %%
+# 2D FBSEM
 dl_model_flname = (
     r"/home/modrzyk/code/FBSEM/model_zoo/brainweb/2d/fbsem-pm-03-epo-45.pth"
+)
+mrfbsem_ld = fbsemInference(
+    dl_model_flname,
+    PET,
+    torch.from_numpy(y_ld).unsqueeze(0),
+    torch.from_numpy(AN_ld).unsqueeze(0),
+    mrImg=torch.from_numpy(t1_2d).unsqueeze(0),
+    niters=10,
+    nsubs=6,
+)
+
+dl_model_flname = (
+    r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-34.pth"
 )
 fbsem_ld = fbsemInference(
     dl_model_flname,
     PET,
     torch.from_numpy(y_ld).unsqueeze(0),
     torch.from_numpy(AN_ld).unsqueeze(0),
-    torch.from_numpy(t1_2d).unsqueeze(0),
+    mrImg=torch.from_numpy(t1_2d).unsqueeze(0),
     niters=10,
     nsubs=6,
 )
@@ -100,7 +116,7 @@ fbsem_ld = fbsemInference(
 
 # %%
 pretrained_path = pathlib.Path(
-    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-05-15:09:25/ckp_best.pth.tar"
+    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_best.pth.tar"
 )
 denoiser = dinv.models.GSDRUNet(
     in_channels=1, out_channels=1, pretrained=pretrained_path
@@ -112,8 +128,8 @@ denoiser = dinv.models.GSDRUNet(
 
 psf_ld = 0.4
 nsubs_ld = 14
-iter_pnpmm = 50
-sigma_denoiser_ld = 0.1
+iter_pnpmm = 60
+sigma_denoiser_ld = 5
 lambda_reg_ld = 0.2
 stepsize_ld = 5
 
@@ -147,13 +163,15 @@ reference_cropped = center_crop(osem_hd, crop_size)
 osem_cropped = center_crop(osem_ld, crop_size)
 pnpmm_nat_cropped = center_crop(pnp_mm_ld, crop_size)
 mapem_cropped = center_crop(map_em_ld, crop_size)
-fbsem_cropped = center_crop(fbsem_ld, crop_size)
+mrfbsem_cropped = center_crop(mrfbsem_ld, crop_size)
+fbsem_ld_cropped = center_crop(fbsem_ld, crop_size)
 
 images_lc = [
     reference_cropped,
     osem_cropped,
     mapem_cropped,
-    fbsem_cropped,
+    mrfbsem_cropped,
+    fbsem_ld_cropped,
     pnpmm_nat_cropped,
 ]
 # Calculate relative error maps
@@ -175,7 +193,7 @@ for img in images_lc:
 vmin_img = min(img.min() for img in images_lc)
 vmax_img = max(img.max() for img in images_lc)
 
-fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+fig, axes = plt.subplots(1, 6, figsize=(20, 4))
 for ax, img, title in zip(
     axes,
     images_lc,
@@ -184,7 +202,8 @@ for ax, img, title in zip(
         "OSEM",
         "mr-MAP-EM",
         "mr-FBSEM",
-        "PnP-MM \n (natural image prior)",
+        "FBSEM",
+        "PnP-MM",
     ],
 ):
     im0 = ax.imshow(img, cmap="gist_gray_r", vmin=vmin_img, vmax=vmax_img)
@@ -202,7 +221,7 @@ v = np.percentile(abs_vals, 99.5)  # robust symmetric range
 norm = colors.TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
 
 # --- error maps: all share the same norm/colorbar
-fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+fig, axes = plt.subplots(1, 6, figsize=(20, 4))
 for ax, emap, title in zip(
     axes,
     error_maps_pct,
@@ -211,7 +230,8 @@ for ax, emap, title in zip(
         "OSEM",
         "mr-MAP-EM",
         "mr-FBSEM",
-        "PnP-MM \n (natural image prior)",
+        "FBSEM",
+        "PnP-MM",
     ],
 ):
     im = ax.imshow(emap, cmap="bwr", norm=norm)
@@ -245,7 +265,8 @@ nmse_results = {}
 methods = [
     ("OSEM LD", osem_cropped),
     ("MAP EM LD", mapem_cropped),
-    ("FBSEM LD", fbsem_cropped),
+    ("MR-FBSEM LD", mrfbsem_cropped),
+    ("FBSEM LD", fbsem_ld_cropped),
     ("PnP MM LD", pnpmm_nat_cropped),
 ]
 for name, img in methods:
@@ -262,10 +283,11 @@ for name, img in methods:
     ).item() * 100
     nmse_results[name] = nmse
     print(f"NMSE {name}: {nmse:.4f}")
-
+print("\n")
 print("Max values of reconstructions:")
 print(f"OSEM LD max: {osem_ld.max():.6f}")
 print(f"MAP-EM LD max: {map_em_ld.max():.6f}")
+print(f"MR-FBSEM LD max: {mrfbsem_ld.max():.6f}")
 print(f"FBSEM LD max: {fbsem_ld.max():.6f}")
 print(f"PnP-MM LD max: {pnp_mm_ld.max():.6f}")
 print(f"OSEM HD max: {osem_hd.max():.6f}")

@@ -27,20 +27,20 @@ parser.add_argument(
 parser.add_argument(
     "--sigma_denoiser",
     type=float,
-    default=10,
+    default=5,
     help="Sigma value for the denoiser",
 )
 parser.add_argument(
     "--lambda_reg",
     type=float,
-    default=0.5,
+    default=0.15,
     help="Regularization parameter lambda",
 )
 
 device = "cuda"
 temPath = r"./tmp"
 phanPath = r"../phantoms/Brainweb/"
-dataPath = r"./MoDL/testDatasets/brainweb/2D/"
+dataPath = r"./MoDL/testFBSEM/brainweb/2D/"
 suffix = r"data-"
 radialBinCropFactor = 0.5
 
@@ -92,12 +92,13 @@ if algorithm == "PNPMM-nat":
         in_channels=1, out_channels=1, pretrained=ckpt_path
     ).to(device)
 elif algorithm == "PNPMM-pet":
-    ckpt_path = pathlib.Path("./weights/25-10-13-14:12:28/ckp_best.pth.tar")
+    ckpt_path = pathlib.Path(
+        "./weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_best.pth.tar"
+    )
     denoiser = dinv.models.GSDRUNet(
         in_channels=1, out_channels=1, pretrained=ckpt_path
     ).to(device)
 
-fbsem_weights = r"/home/modrzyk/code/FBSEM/model_zoo/brainweb/2d/fbsem-pm-03-epo-45.pth"
 # Create timestamp and directory structure
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 recons_dir = pathlib.Path(f"./tests/{algorithm}/{timestamp}/recons/")
@@ -131,17 +132,20 @@ with torch.no_grad():
                 psf=psf_ld,
             )
         elif algorithm == "FBSEM-pet":
-            raise NotImplementedError("FBSEM-pet weights not available.")
-        #     reconstructed = fbsemInference(
-        #         dl_model_flname=fbsem_weights,
-        #         PET=PET,
-        #         sinoLD=sinoLD,
-        #         AN=AN,
-        #         mrImg=None,
-        #         niters=10,
-        #         nsubs=6,
-        #     )
+            fbsem_weights = r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-34.pth"
+            reconstructed = fbsemInference(
+                dl_model_flname=fbsem_weights,
+                PET=PET,
+                sinoLD=sinoLD,
+                AN=AN,
+                mrImg=None,
+                niters=10,
+                nsubs=6,
+            )
         elif algorithm == "FBSEM-petmr":
+            fbsem_weights = (
+                r"/home/modrzyk/code/FBSEM/model_zoo/brainweb/2d/fbsem-pm-03-epo-45.pth"
+            )
             reconstructed = fbsemInference(
                 dl_model_flname=fbsem_weights,
                 PET=PET,
@@ -160,12 +164,12 @@ with torch.no_grad():
                 AN=AN.numpy(),
                 iSensImg=None,
                 niter=60,
-                nsubs=1,
+                nsubs=14,
                 psf=psf_ld,
                 denoiser=denoiser,
                 sigma=sigma_denoiser,
                 lambda_reg=lambda_reg,
-                tau=1e2,
+                tau=5,
             )
 
         if isinstance(reconstructed, np.ndarray):

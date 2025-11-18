@@ -1,5 +1,5 @@
 import torch
-from deepinv.loss import PSNR
+from deepinv.loss import PSNR, NMSE
 from deepinv.loss.metric import MSE
 import deepinv as dinv
 from pathlib import Path
@@ -114,7 +114,7 @@ trainer = Trainer(
     optimizer=optimizer,
     train_dataloader=train_loader,
     eval_dataloader=val_loader,
-    metrics=[PSNR()],
+    metrics=[NMSE()],
     eval_interval=1,
     device=device,
     epochs=epochs,
