@@ -219,9 +219,9 @@ def Trainer(PET, model, opts, train_loader, valid_loader=None):
     g.in_channels = 1
     g.save_dir = os.getcwd()
     g.model_name = "fbsem-pm-01"
-    g.display = True
+    g.display = False
     g.disp_figsize = (20, 10)
-    g.save_from_epoch = None
+    g.save_from_epoch = 1
     g.crop_factor = 0.3
     g.do_validation = True
     g.device = "cpu"
@@ -275,7 +275,7 @@ def Trainer(PET, model, opts, train_loader, valid_loader=None):
                 model.gamma.data = model.gamma.data = torch.Tensor([0.01]).to(
                     g.device, dtype=torch.float32
                 )
-            if display:
+            if g.display:
                 imShowBatch(crop(toNumpy(img).squeeze(), 0.3), figsize=g.disp_figsize)
                 gam = model.gamma.clone().detach().cpu().numpy()[0]
                 print(f"gamma: {gam}")
