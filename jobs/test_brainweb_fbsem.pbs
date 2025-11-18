@@ -1,0 +1,16 @@
+#!/bin/bash
+#PBS -N test_brainweb_fbsem
+#PBS -l nodes=1:ppn=12:gpus=1
+#PBS -q gpu
+#PBS -l mem=64gb
+#PBS -l walltime=12:00:00
+#PBS -o test_brainweb_fbsem.o
+#PBS -e test_brainweb_fbsem.err
+#PBS -m ae
+#PBS -M thibaut.modrzyk@creatis.insa-lyon.fr
+set -e
+
+cd "${PBS_O_WORKDIR}"
+hostname
+source .venv/bin/activate
+python test.py --algo FBSEM-pet
