@@ -28,9 +28,9 @@ print("\nsinogram info:", PET.sinogram.as_dict())
 # Should produce 100 test slices (5 phantoms, 4 random rotations each, 5 slices each,...)
 
 phanPath = r"./phantoms/Brainweb"
-save_training_dir = r"./MoDL/testFBSEM/brainweb/2D"
+save_training_dir = r"./MoDL/testFBSEM2/brainweb/2D"
 phanType = "brainweb"
-phanNumber = np.arange(9, 19, 1)  # Use 10 last brainweb phantom
+phanNumber = np.arange(10, 20, 1)  # Use 10 last brainweb phantom
 
 buildBrainPhantomDataset(
     PET,
@@ -40,4 +40,6 @@ buildBrainPhantomDataset(
     phanNumber=phanNumber,
     is3d=False,
     num_rand_rotations=5,
+    rot_angle_degrees=10,
+    slices_2d=np.arange(65, 85, 2),
 )
