@@ -5,7 +5,7 @@ import deepinv as dinv
 import matplotlib.pyplot as plt
 from matplotlib import colors
 
-img_idx = 0
+img_idx = 15
 reference = np.load(
     f"../tests/OSEM/20251021_094911/gt/gt_{str(img_idx).zfill(3)}.npy"
 ).squeeze()

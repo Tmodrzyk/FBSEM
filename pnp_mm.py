@@ -8,6 +8,8 @@ from phantoms.brainweb import PETbrainWebPhantom
 import matplotlib.pyplot as plt
 import seaborn as sns
 from models.modellib import FBSEMnet_v3, Trainer, fbsemInference
+from models.deeplib import DatasetPetMr_v2, dotstruct, toNumpy, crop
+import random
 
 sns.set_theme("notebook")
 
@@ -18,39 +20,12 @@ radialBinCropFactor = 0.5
 PET = BuildGeometry_v4("mmr", radialBinCropFactor)
 PET.loadSystemMatrix(temPath, is3d=False, tof=False)
 
-img_3d, mumap_3d, t1_3d, t2_3d = PETbrainWebPhantom(
-    phanPath,
-    phantom_number=18,
-    voxel_size=np.array(PET.image.voxelSizeCm) * 10,
-    image_size=PET.image.matrixSize,
-    pet_lesion=True,
-    t1_lesion=True,
-    t2_lesion=True,
-    num_lesions=15,
-    hot_cold_ratio=0.8,
-)
-# %%
-slice_index = 70
-img_2d = img_3d[:, :, slice_index]
-mumap_2d = mumap_3d[:, :, slice_index]
-t1_2d = t1_3d[:, :, slice_index]
-t2_2d = t2_3d[:, :, slice_index]
-psf_cm = 0.25
-
-dinv.utils.plot(
-    [
-        torch.from_numpy(img_2d).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(t1_2d).unsqueeze(0).unsqueeze(0),
-        torch.from_numpy(t2_2d).unsqueeze(0).unsqueeze(0),
-    ],
-    titles=["PET phantom", "T1-weighted MRI", "T2-weighted MRI"],
-    cmap="gist_gray_r",
-    figsize=(15, 5),
-)
-## 2D forward project
-# y = PET.forwardProjectBatch2D(img_2d, psf = psf_cm)
-# y_batch = PET.forwardProjectBatch2D(img_2d_batch, psf = psf_cm)
-
+device = "cuda"
+temPath = r"./tmp"
+phanPath = r"../phantoms/Brainweb/"
+dataPath = r"./MoDL/testFBSEM/brainweb/2D/"
+suffix = r"data-"
+radialBinCropFactor = 0.5
 
 psf_hd = 0.25
 psf_ld = 0.4
@@ -61,24 +36,55 @@ nsubs_ld = 14
 counts_hd = 1e10
 counts_ld = 1e6
 
-# simulate 2D noisy sinograms
-y_hd, AF_hd, NF_hd, Randoms_hd = PET.simulateSinogramData(
-    img_2d, mumap=mumap_2d, counts=counts_hd, psf=psf_hd
+# Reproducilibity
+seed = 42
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+
+PET = BuildGeometry_v4("mmr", radialBinCropFactor)
+PET.loadSystemMatrix(temPath, is3d=False, tof=False)
+
+
+dataset = DatasetPetMr_v2(
+    filename=[dataPath, suffix],
+    num_train=100,
+    transform=None,
+    target_transform=None,
+    is3d=False,
+    crop_factor=0,
 )
-y_ld, AF_ld, NF_ld, Randoms_ld = PET.simulateSinogramData(
-    img_2d, mumap=mumap_2d, counts=counts_ld, psf=psf_ld
+test_dataloader = torch.utils.data.DataLoader(
+    dataset, batch_size=1, shuffle=False, num_workers=0
+)
+# %%
+sinoLD, imgHD, AN, RS, imgLD, imgLD_psf, mrImg, counts, imgGT, index = next(
+    iter(
+        torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=0)
+    )
 )
 
+
+dinv.utils.plot(
+    [
+        imgGT,
+        imgLD_psf,
+        mrImg,
+    ],
+    titles=["High-count OSEM", "Low-count OSEM", "T1-weighted MRI"],
+    cmap="gist_gray_r",
+    figsize=(15, 5),
+)
+## 2D forward project
+# y = PET.forwardProjectBatch2D(img_2d, psf = psf_cm)
+# y_batch = PET.forwardProjectBatch2D(img_2d_batch, psf = psf_cm)
+print(sinoLD.shape, AN.shape, mrImg.shape)
 # %%
 # 2D OSEM
-AN_hd = AF_hd * NF_hd
-AN_ld = AF_ld * NF_ld
-osem_hd = PET.OSEM2D(y_hd, AN=AN_hd, niter=niter_hd, nsubs=nsubs_hd, psf=psf_hd)
-osem_ld = PET.OSEM2D(y_ld, AN=AN_ld, niter=niter_ld, nsubs=nsubs_ld, psf=psf_ld)
 map_em_ld = PET.mrMAPEM2DBatch(
-    np.expand_dims(y_ld, axis=0),
-    AN=np.expand_dims(AN_ld, axis=0),
-    mrImg=np.expand_dims(t1_2d, axis=0),
+    prompts=sinoLD.numpy(),
+    AN=AN.numpy(),
+    mrImg=mrImg.numpy(),
     beta=0.06,
     niters=10,
     nsubs=6,
@@ -93,22 +99,22 @@ dl_model_flname = (
 mrfbsem_ld = fbsemInference(
     dl_model_flname,
     PET,
-    torch.from_numpy(y_ld).unsqueeze(0),
-    torch.from_numpy(AN_ld).unsqueeze(0),
-    mrImg=torch.from_numpy(t1_2d).unsqueeze(0),
+    sinoLD,
+    AN,
+    mrImg=mrImg,
     niters=10,
     nsubs=6,
 )
 
 dl_model_flname = (
-    r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-34.pth"
+    r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-49.pth"
 )
 fbsem_ld = fbsemInference(
     dl_model_flname,
     PET,
-    torch.from_numpy(y_ld).unsqueeze(0),
-    torch.from_numpy(AN_ld).unsqueeze(0),
-    mrImg=torch.from_numpy(t1_2d).unsqueeze(0),
+    sinoLD=sinoLD,
+    AN=AN,
+    mrImg=None,
     niters=10,
     nsubs=6,
 )
@@ -128,16 +134,16 @@ denoiser = dinv.models.GSDRUNet(
 
 psf_ld = 0.4
 nsubs_ld = 14
-iter_pnpmm = 60
-sigma_denoiser_ld = 5
+iter_pnpmm = 30
+sigma_denoiser_ld = 8
 lambda_reg_ld = 0.2
-stepsize_ld = 5
+stepsize_ld = 100
 
 pnp_mm_ld, xs = PET.PnP_MM2D(
-    prompts=y_ld,
+    prompts=sinoLD.numpy(),
     img=None,
     RS=None,
-    AN=AN_ld,
+    AN=AN.numpy(),
     iSensImg=None,
     niter=iter_pnpmm,
     nsubs=14,
@@ -147,6 +153,7 @@ pnp_mm_ld, xs = PET.PnP_MM2D(
     lambda_reg=lambda_reg_ld,
     tau=stepsize_ld,
 )
+# %%
 # Center crop the images first
 from matplotlib import colors
 
@@ -159,8 +166,8 @@ def center_crop(img, crop_size):
 
 
 crop_size = 128  # adjust as needed
-reference_cropped = center_crop(osem_hd, crop_size)
-osem_cropped = center_crop(osem_ld, crop_size)
+reference_cropped = center_crop(imgGT.squeeze().numpy(), crop_size)
+osem_cropped = center_crop(imgLD_psf.squeeze().numpy(), crop_size)
 pnpmm_nat_cropped = center_crop(pnp_mm_ld, crop_size)
 mapem_cropped = center_crop(map_em_ld, crop_size)
 mrfbsem_cropped = center_crop(mrfbsem_ld, crop_size)
@@ -217,7 +224,7 @@ plt.close()
 # --- shared norm for ALL error maps, centered at 0
 # use a robust limit to avoid a single outlier blowing the scale
 abs_vals = np.concatenate([np.abs(e[mask]).ravel() for e in error_maps_pct])
-v = np.percentile(abs_vals, 99.5)  # robust symmetric range
+v = np.percentile(abs_vals, 90)  # robust symmetric range
 norm = colors.TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
 
 # --- error maps: all share the same norm/colorbar
@@ -244,12 +251,10 @@ plt.show()
 mse = dinv.metric.MSE()
 rnmse_pnpmm = [
     (
-        torch.sqrt(
-            mse(
-                torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
-                torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
-            )
-        )
+        mse(
+            torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
+            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
+        ).sqrt()
         / torch.norm(
             torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0)
         ).sqrt()
@@ -261,7 +266,7 @@ rnmse_pnpmm = [
 plt.plot(rnmse_pnpmm)
 plt.show()
 # Refactored NMSE calculation and printing for all methods
-nmse_results = {}
+rnmse_results = {}
 methods = [
     ("OSEM LD", osem_cropped),
     ("MAP EM LD", mapem_cropped),
@@ -270,27 +275,25 @@ methods = [
     ("PnP MM LD", pnpmm_nat_cropped),
 ]
 for name, img in methods:
-    nmse = (
-        torch.sqrt(
-            mse(
-                torch.from_numpy(img).unsqueeze(0).unsqueeze(0),
-                torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
-            )
-        )
+    rnmse = (
+        mse(
+            torch.from_numpy(img).unsqueeze(0).unsqueeze(0),
+            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
+        ).sqrt()
         / torch.norm(
             torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0)
         ).sqrt()
     ).item() * 100
-    nmse_results[name] = nmse
-    print(f"NMSE {name}: {nmse:.4f}")
+    rnmse_results[name] = rnmse
+    print(f"RNMSE {name}: {rnmse:.4f}")
 print("\n")
 print("Max values of reconstructions:")
-print(f"OSEM LD max: {osem_ld.max():.6f}")
+print(f"OSEM LD max: {imgLD_psf.max():.6f}")
 print(f"MAP-EM LD max: {map_em_ld.max():.6f}")
 print(f"MR-FBSEM LD max: {mrfbsem_ld.max():.6f}")
 print(f"FBSEM LD max: {fbsem_ld.max():.6f}")
 print(f"PnP-MM LD max: {pnp_mm_ld.max():.6f}")
-print(f"OSEM HD max: {osem_hd.max():.6f}")
+print(f"OSEM HD max: {imgHD.max():.6f}")
 
 # %%
 for error_map in error_maps_pct:

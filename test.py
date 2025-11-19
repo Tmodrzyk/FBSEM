@@ -56,7 +56,7 @@ counts_ld = 1e6
 args = parser.parse_args()
 
 algorithm = args.algo
-sigma_denoiser = args.sigma_denoiser / 255.0
+sigma_denoiser = args.sigma_denoiser
 lambda_reg = args.lambda_reg
 
 # Reproducilibity
@@ -163,13 +163,13 @@ with torch.no_grad():
                 RS=None,
                 AN=AN.numpy(),
                 iSensImg=None,
-                niter=60,
+                niter=30,
                 nsubs=14,
                 psf=psf_ld,
                 denoiser=denoiser,
                 sigma=sigma_denoiser,
                 lambda_reg=lambda_reg,
-                tau=5,
+                tau=100,
             )
 
         if isinstance(reconstructed, np.ndarray):

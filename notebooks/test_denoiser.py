@@ -69,7 +69,7 @@ model = dinv.models.GSDRUNet(
     device=device,
 )
 # %%
-sigma_noise = 20
+sigma_noise = 40
 physics = dinv.physics.Denoising(
     noise_model=dinv.physics.GaussianNoise(sigma=sigma_noise),
     device=device,
@@ -78,9 +78,29 @@ physics = dinv.physics.Denoising(
 model.eval()
 with torch.no_grad():
     x = next(iter(train_loader)).to(device)
-    y = physics(x)
-    x_net = model(y, sigma_noise)
-    dinv.utils.plot([x, y, x_net], ["GGT", "Noisy", "Denoised"], figsize=(12, 12))
+    y = physics(x).clamp(min=1e-16)
+    x_net = model(y, sigma_noise).clamp(min=1e-16)
+
+    images_lc = [
+        x,
+        y,
+        x_net,
+    ]
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    vmin = min([img.min().item() for img in images_lc])
+    vmax = max([img.max().item() for img in images_lc])
+
+    titles = ["Ground Truth", "Noisy", "Denoised"]
+    for ax, img, title in zip(axes, images_lc, titles):
+        ax.imshow(img[0, 0].cpu().numpy(), cmap="gist_gray_r", vmin=vmin, vmax=vmax)
+        ax.set_title(title)
+        ax.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
 
 for i, arr in enumerate([x, y, x_net]):
     arr_np = arr.detach().cpu().numpy()
