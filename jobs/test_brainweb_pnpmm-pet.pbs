@@ -1,11 +1,11 @@
 #!/bin/bash
-#PBS -N test_brainweb_pnpmm-nat
+#PBS -N test_brainweb_pnpmm-pet
 #PBS -l nodes=1:ppn=12:gpus=1
 #PBS -q gpu
 #PBS -l mem=64gb
 #PBS -l walltime=12:00:00
-#PBS -o test_brainweb_pnpmm-nat.o
-#PBS -e test_brainweb_pnpmm-nat.err
+#PBS -o test_brainweb_pnpmm-pet.o
+#PBS -e test_brainweb_pnpmm-pet.err
 #PBS -m ae
 #PBS -M thibaut.modrzyk@creatis.insa-lyon.fr
 set -e
