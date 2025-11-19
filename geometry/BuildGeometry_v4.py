@@ -2510,7 +2510,7 @@ class BuildGeometry_v4:
                 # dinv.utils.plot(t_img, cmap="gist_gray_r")
 
                 with torch.no_grad():
-                    t_deno = denoiser(t_img, sigma).clamp(min=1e-16)
+                    t_deno = denoiser(t_img, sigma).clamp(min=0)
                 deno_crop = t_deno.squeeze(1).detach().cpu().numpy()
                 # Blend cropped denoised output with cropped input
                 img_crop = (1.0 - lambda_reg) * img_crop + lambda_reg * deno_crop

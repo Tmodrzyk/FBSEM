@@ -132,7 +132,7 @@ with torch.no_grad():
                 psf=psf_ld,
             )
         elif algorithm == "FBSEM-pet":
-            fbsem_weights = r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-34.pth"
+            fbsem_weights = r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-49.pth"
             reconstructed = fbsemInference(
                 dl_model_flname=fbsem_weights,
                 PET=PET,
