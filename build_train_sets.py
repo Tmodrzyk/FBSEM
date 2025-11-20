@@ -44,6 +44,7 @@ buildBrainPhantomDataset(
     num_rand_rotations=5,
     rot_angle_degrees=15,
     psf_hd=0,
+    slices_2d=np.arange(65, 86, 2),
 )
 
 # %%

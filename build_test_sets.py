@@ -41,5 +41,5 @@ buildBrainPhantomDataset(
     is3d=False,
     num_rand_rotations=5,
     rot_angle_degrees=10,
-    slices_2d=np.arange(65, 85, 2),
+    slices_2d=np.arange(65, 86, 2),
 )
