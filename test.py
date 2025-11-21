@@ -93,7 +93,7 @@ if algorithm == "PNPMM-nat":
     ).to(device)
 elif algorithm == "PNPMM-pet":
     ckpt_path = pathlib.Path(
-        "./weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_best.pth.tar"
+        "./weights/GSDRUNet-brainweb/25-11-20-15:32:12/ckp_best.pth.tar"
     )
     denoiser = dinv.models.GSDRUNet(
         in_channels=1, out_channels=1, pretrained=ckpt_path
@@ -132,7 +132,7 @@ with torch.no_grad():
                 psf=psf_ld,
             )
         elif algorithm == "FBSEM-pet":
-            fbsem_weights = r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-49.pth"
+            fbsem_weights = r"./weights/FBSEM-brainweb/run2/fbsem-pm-03-epo-49.pth"
             reconstructed = fbsemInference(
                 dl_model_flname=fbsem_weights,
                 PET=PET,
