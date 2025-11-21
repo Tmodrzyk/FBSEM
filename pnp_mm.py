@@ -107,7 +107,7 @@ mrfbsem_ld = fbsemInference(
 )
 
 dl_model_flname = (
-    r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/fbsem-pm-03-epo-49.pth"
+    r"/home/modrzyk/code/FBSEM/weights/FBSEM-brainweb/run2/fbsem-pm-03-epo-49.pth"
 )
 fbsem_ld = fbsemInference(
     dl_model_flname,
@@ -122,7 +122,7 @@ fbsem_ld = fbsemInference(
 
 # %%
 pretrained_path = pathlib.Path(
-    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_best.pth.tar"
+    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-20-15:32:12/ckp_best.pth.tar"
 )
 denoiser = dinv.models.GSDRUNet(
     in_channels=1, out_channels=1, pretrained=pretrained_path
@@ -136,7 +136,7 @@ psf_ld = 0.4
 nsubs_ld = 14
 iter_pnpmm = 30
 sigma_denoiser_ld = 8
-lambda_reg_ld = 0.2
+lambda_reg_ld = 0.25
 stepsize_ld = 100
 
 pnp_mm_ld, xs = PET.PnP_MM2D(
@@ -165,36 +165,45 @@ def center_crop(img, crop_size):
     return img[start_h : start_h + crop_size, start_w : start_w + crop_size]
 
 
-crop_size = 128  # adjust as needed
+crop_size = 100  # adjust as needed
 reference_cropped = center_crop(imgGT.squeeze().numpy(), crop_size)
 osem_cropped = center_crop(imgLD_psf.squeeze().numpy(), crop_size)
-pnpmm_nat_cropped = center_crop(pnp_mm_ld, crop_size)
+pnpmm_cropped = center_crop(pnp_mm_ld, crop_size)
 mapem_cropped = center_crop(map_em_ld, crop_size)
 mrfbsem_cropped = center_crop(mrfbsem_ld, crop_size)
 fbsem_ld_cropped = center_crop(fbsem_ld, crop_size)
 
-images_lc = [
+images_cropped = [
     reference_cropped,
     osem_cropped,
     mapem_cropped,
     mrfbsem_cropped,
     fbsem_ld_cropped,
-    pnpmm_nat_cropped,
+    pnpmm_cropped,
 ]
+
+images_lc = [
+    imgGT.squeeze().numpy(),
+    imgLD_psf.squeeze().numpy(),
+    pnp_mm_ld,
+    map_em_ld,
+    mrfbsem_ld,
+    fbsem_ld,
+]
+
 # Calculate relative error maps
 eps = 1e-8
-mask = reference_cropped > (0.02 * reference_cropped.max())
+mask = imgGT.squeeze().numpy() > (0.02 * imgGT.squeeze().numpy().max())
 
 # --- define percentage error (pixelwise relative to reference where mask=True)
 error_maps_pct = []
 for img in images_lc:
-    rel = np.zeros_like(reference_cropped, dtype=float)
-    denom = np.maximum(reference_cropped, eps)
-    rel[mask] = 100.0 * (img[mask] - reference_cropped[mask]) / denom[mask]
+    rel = np.zeros_like(imgGT.squeeze().numpy(), dtype=float)
+    denom = np.maximum(imgGT.squeeze().numpy(), eps)
+    rel[mask] = 100.0 * (img[mask] - imgGT.squeeze().numpy()[mask]) / denom[mask]
     error_maps_pct.append(rel)
 
 # Create subplot with 2 rows
-
 
 # --- originals: share vmin/vmax so their gray scales are comparable
 vmin_img = min(img.min() for img in images_lc)
@@ -203,14 +212,14 @@ vmax_img = max(img.max() for img in images_lc)
 fig, axes = plt.subplots(1, 6, figsize=(20, 4))
 for ax, img, title in zip(
     axes,
-    images_lc,
+    images_cropped,
     [
         "Reference OSEM \n (high-dose)",
         "OSEM",
+        "PnP-MM",
         "mr-MAP-EM",
         "mr-FBSEM",
         "FBSEM",
-        "PnP-MM",
     ],
 ):
     im0 = ax.imshow(img, cmap="gist_gray_r", vmin=vmin_img, vmax=vmax_img)
@@ -252,36 +261,37 @@ mse = dinv.metric.MSE()
 rnmse_pnpmm = [
     (
         mse(
-            torch.from_numpy(center_crop(x, crop_size)).unsqueeze(0).unsqueeze(0),
-            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
+            torch.from_numpy(x).unsqueeze(0).unsqueeze(0),
+            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0),
         ).sqrt()
         / torch.norm(
-            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0)
+            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0)
         ).sqrt()
     )
     * 100
-    for x in xs
+    for x in xs[1:]
 ]
 
 plt.plot(rnmse_pnpmm)
 plt.show()
+
 # Refactored NMSE calculation and printing for all methods
 rnmse_results = {}
 methods = [
-    ("OSEM LD", osem_cropped),
-    ("MAP EM LD", mapem_cropped),
-    ("MR-FBSEM LD", mrfbsem_cropped),
-    ("FBSEM LD", fbsem_ld_cropped),
-    ("PnP MM LD", pnpmm_nat_cropped),
+    ("OSEM LD", imgLD_psf.squeeze().numpy()),
+    ("MAP EM LD", map_em_ld),
+    ("MR-FBSEM LD", mrfbsem_ld),
+    ("FBSEM LD", fbsem_ld),
+    ("PnP MM LD", pnp_mm_ld),
 ]
 for name, img in methods:
     rnmse = (
         mse(
             torch.from_numpy(img).unsqueeze(0).unsqueeze(0),
-            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0),
+            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0),
         ).sqrt()
         / torch.norm(
-            torch.from_numpy(reference_cropped).unsqueeze(0).unsqueeze(0)
+            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0)
         ).sqrt()
     ).item() * 100
     rnmse_results[name] = rnmse
