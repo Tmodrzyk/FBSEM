@@ -82,6 +82,7 @@ test_dataloader = torch.utils.data.DataLoader(
 )
 
 mse = dinv.loss.metric.MSE()
+nmse = dinv.loss.metric.NMSE()
 
 # Testing loop
 nrmse_values = []
@@ -178,13 +179,7 @@ with torch.no_grad():
         # Save reconstruction and ground truth as numpy arrays
         np.save(recons_dir / f"recon_{batch_idx:03d}.npy", reconstructed.cpu().numpy())
         np.save(gt_dir / f"gt_{batch_idx:03d}.npy", imgHD.cpu().numpy())
-        nmrse_val = (
-            mse(
-                reconstructed.to(device),
-                imgHD.to(device),
-            ).sqrt()
-            / torch.norm(imgHD.to(device)).sqrt()
-        ) * 100
+        nmrse_val = nmse(reconstructed, imgHD).sqrt()
         nrmse_values.append(nmrse_val.item())
 
 # Convert to numpy array and compute statistics
