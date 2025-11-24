@@ -122,7 +122,7 @@ fbsem_ld = fbsemInference(
 
 # %%
 pretrained_path = pathlib.Path(
-    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-20-15:32:12/ckp_best.pth.tar"
+    "/home/modrzyk/code/FBSEM/weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_499.pth.tar"
 )
 denoiser = dinv.models.GSDRUNet(
     in_channels=1, out_channels=1, pretrained=pretrained_path
@@ -134,9 +134,9 @@ denoiser = dinv.models.GSDRUNet(
 
 psf_ld = 0.4
 nsubs_ld = 14
-iter_pnpmm = 30
-sigma_denoiser_ld = 8
-lambda_reg_ld = 0.25
+iter_pnpmm = 50
+sigma_denoiser_ld = 5
+lambda_reg_ld = 0.3
 stepsize_ld = 100
 
 pnp_mm_ld, xs = PET.PnP_MM2D(
@@ -153,7 +153,6 @@ pnp_mm_ld, xs = PET.PnP_MM2D(
     lambda_reg=lambda_reg_ld,
     tau=stepsize_ld,
 )
-# %%
 # Center crop the images first
 from matplotlib import colors
 
@@ -176,10 +175,10 @@ fbsem_ld_cropped = center_crop(fbsem_ld, crop_size)
 images_cropped = [
     reference_cropped,
     osem_cropped,
+    pnpmm_cropped,
     mapem_cropped,
     mrfbsem_cropped,
     fbsem_ld_cropped,
-    pnpmm_cropped,
 ]
 
 images_lc = [
@@ -192,88 +191,20 @@ images_lc = [
 ]
 
 # Calculate relative error maps
-eps = 1e-8
-mask = imgGT.squeeze().numpy() > (0.02 * imgGT.squeeze().numpy().max())
+eps = 1e-24
+mask = reference_cropped > (0.02 * reference_cropped.max())
 
 # --- define percentage error (pixelwise relative to reference where mask=True)
 error_maps_pct = []
-for img in images_lc:
-    rel = np.zeros_like(imgGT.squeeze().numpy(), dtype=float)
-    denom = np.maximum(imgGT.squeeze().numpy(), eps)
-    rel[mask] = 100.0 * (img[mask] - imgGT.squeeze().numpy()[mask]) / denom[mask]
+for img in images_cropped:
+    rel = np.zeros_like(reference_cropped, dtype=float)
+    denom = np.maximum(reference_cropped, eps)
+    rel[mask] = 100.0 * (img[mask] - reference_cropped[mask]) / denom[mask]
     error_maps_pct.append(rel)
 
-# Create subplot with 2 rows
-
-# --- originals: share vmin/vmax so their gray scales are comparable
 vmin_img = min(img.min() for img in images_lc)
 vmax_img = max(img.max() for img in images_lc)
 
-fig, axes = plt.subplots(1, 6, figsize=(20, 4))
-for ax, img, title in zip(
-    axes,
-    images_cropped,
-    [
-        "Reference OSEM \n (high-dose)",
-        "OSEM",
-        "PnP-MM",
-        "mr-MAP-EM",
-        "mr-FBSEM",
-        "FBSEM",
-    ],
-):
-    im0 = ax.imshow(img, cmap="gist_gray_r", vmin=vmin_img, vmax=vmax_img)
-    ax.set_title(title, fontsize=12)
-    ax.axis("off")
-cbar0 = fig.colorbar(im0, ax=axes.ravel().tolist())
-cbar0.set_label("Intensity (a.u.)")
-plt.show()
-plt.close()
-
-# --- shared norm for ALL error maps, centered at 0
-# use a robust limit to avoid a single outlier blowing the scale
-abs_vals = np.concatenate([np.abs(e[mask]).ravel() for e in error_maps_pct])
-v = np.percentile(abs_vals, 90)  # robust symmetric range
-norm = colors.TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
-
-# --- error maps: all share the same norm/colorbar
-fig, axes = plt.subplots(1, 6, figsize=(20, 4))
-for ax, emap, title in zip(
-    axes,
-    error_maps_pct,
-    [
-        "Reference (no error)",
-        "OSEM",
-        "mr-MAP-EM",
-        "mr-FBSEM",
-        "FBSEM",
-        "PnP-MM",
-    ],
-):
-    im = ax.imshow(emap, cmap="bwr", norm=norm)
-    ax.set_title(f"{title}", fontsize=12)
-    ax.axis("off")
-
-fig.colorbar(im, ax=axes.ravel().tolist(), label=r"Error (\%)")
-plt.show()
-
-mse = dinv.metric.MSE()
-rnmse_pnpmm = [
-    (
-        mse(
-            torch.from_numpy(x).unsqueeze(0).unsqueeze(0),
-            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0),
-        ).sqrt()
-        / torch.norm(
-            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0)
-        ).sqrt()
-    )
-    * 100
-    for x in xs[1:]
-]
-
-plt.plot(rnmse_pnpmm)
-plt.show()
 
 # Refactored NMSE calculation and printing for all methods
 rnmse_results = {}
@@ -284,18 +215,82 @@ methods = [
     ("FBSEM LD", fbsem_ld),
     ("PnP MM LD", pnp_mm_ld),
 ]
+nmse = dinv.metric.NMSE()
+
 for name, img in methods:
     rnmse = (
-        mse(
+        nmse(
             torch.from_numpy(img).unsqueeze(0).unsqueeze(0),
             torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0),
-        ).sqrt()
-        / torch.norm(
-            torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0)
-        ).sqrt()
-    ).item() * 100
+        )
+        .sqrt()
+        .item()
+        * 100
+    )
     rnmse_results[name] = rnmse
     print(f"RNMSE {name}: {rnmse:.4f}")
+
+fig, axes = plt.subplots(1, 6, figsize=(20, 4))
+titles_with_nmse = [
+    "Reference OSEM \n (high-dose)",
+    f"OSEM\nRNMSE: {rnmse_results['OSEM LD']:.2f}%",
+    f"PnP-MM\nRNMSE: {rnmse_results['PnP MM LD']:.2f}%",
+    f"mr-MAP-EM\nRNMSE: {rnmse_results['MAP EM LD']:.2f}%",
+    f"mr-FBSEM\nRNMSE: {rnmse_results['MR-FBSEM LD']:.2f}%",
+    f"FBSEM\nRNMSE: {rnmse_results['FBSEM LD']:.2f}%",
+]
+for ax, img, title in zip(
+    axes,
+    images_cropped,
+    titles_with_nmse,
+):
+    im0 = ax.imshow(img, cmap="gist_gray_r", vmin=vmin_img, vmax=vmax_img)
+    ax.set_title(title, fontsize=12)
+    ax.axis("off")
+cbar0 = fig.colorbar(im0, ax=axes.ravel().tolist())
+cbar0.set_label("Intensity (a.u.)")
+plt.show()
+plt.close()
+
+abs_vals = np.concatenate([np.abs(e[mask]).ravel() for e in error_maps_pct])
+v = np.percentile(abs_vals, 92)  # robust symmetric range
+norm = colors.TwoSlopeNorm(vmin=-v, vcenter=0.0, vmax=v)
+
+fig, axes = plt.subplots(1, 6, figsize=(20, 4))
+for ax, emap, title in zip(
+    axes,
+    error_maps_pct,
+    [
+        "Reference (no error)",
+        "OSEM",
+        "PnP-MM",
+        "mr-MAP-EM",
+        "mr-FBSEM",
+        "FBSEM",
+    ],
+):
+    im = ax.imshow(emap, cmap="bwr", norm=norm)
+    ax.set_title(f"{title}", fontsize=12)
+    ax.axis("off")
+
+fig.colorbar(im, ax=axes.ravel().tolist(), label=r"Error (\%)")
+plt.show()
+
+rnmse_pnpmm = [
+    nmse(
+        torch.from_numpy(x).unsqueeze(0).unsqueeze(0),
+        torch.from_numpy(imgGT.squeeze().numpy()).unsqueeze(0).unsqueeze(0),
+    )
+    .sqrt()
+    .item()
+    * 100
+    for x in xs[1:]
+]
+
+plt.plot(rnmse_pnpmm)
+plt.show()
+
+
 print("\n")
 print("Max values of reconstructions:")
 print(f"OSEM LD max: {imgLD_psf.max():.6f}")

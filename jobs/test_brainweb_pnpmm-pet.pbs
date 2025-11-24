@@ -13,4 +13,4 @@ set -e
 cd "${PBS_O_WORKDIR}"
 hostname
 source .venv/bin/activate
-python test.py --algo PNPMM-pet --sigma_denoiser 10 --lambda_reg 0.25
+python test.py --algo PNPMM-pet --sigma_denoiser 5 --lambda_reg 0.3

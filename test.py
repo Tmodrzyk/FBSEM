@@ -33,7 +33,7 @@ parser.add_argument(
 parser.add_argument(
     "--lambda_reg",
     type=float,
-    default=0.15,
+    default=0.3,
     help="Regularization parameter lambda",
 )
 
@@ -71,7 +71,7 @@ PET.loadSystemMatrix(temPath, is3d=False, tof=False)
 
 dataset = DatasetPetMr_v2(
     filename=[dataPath, suffix],
-    num_train=100,
+    num_train=500,
     transform=None,
     target_transform=None,
     is3d=False,
@@ -93,7 +93,7 @@ if algorithm == "PNPMM-nat":
     ).to(device)
 elif algorithm == "PNPMM-pet":
     ckpt_path = pathlib.Path(
-        "./weights/GSDRUNet-brainweb/25-11-20-15:32:12/ckp_best.pth.tar"
+        "./weights/GSDRUNet-brainweb/25-11-18-09:22:17/ckp_499.pth.tar"
     )
     denoiser = dinv.models.GSDRUNet(
         in_channels=1, out_channels=1, pretrained=ckpt_path
@@ -132,7 +132,7 @@ with torch.no_grad():
                 psf=psf_ld,
             )
         elif algorithm == "FBSEM-pet":
-            fbsem_weights = r"./weights/FBSEM-brainweb/run2/fbsem-pm-03-epo-49.pth"
+            fbsem_weights = r"./weights/FBSEM-brainweb/run3/fbsem-pm-03-epo-50.pth"
             reconstructed = fbsemInference(
                 dl_model_flname=fbsem_weights,
                 PET=PET,
@@ -163,7 +163,7 @@ with torch.no_grad():
                 RS=None,
                 AN=AN.numpy(),
                 iSensImg=None,
-                niter=30,
+                niter=50,
                 nsubs=14,
                 psf=psf_ld,
                 denoiser=denoiser,
