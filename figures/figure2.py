@@ -17,7 +17,9 @@ osem_dir = Path("../tests/OSEM/20251124_112527/recons/")
 mapem_dir = Path("../tests/MAPEM/20251124_112530/recons/")
 mrfbsem_dir = Path("../tests/FBSEM-petmr/20251124_112537/recons/")
 fbsem_dir = Path("../tests/FBSEM-pet/20251124_112659/recons/")
-pnpmm_pet_dir = Path("../tests/PNPMM-pet/20251124_112720/recons/")
+# pnpmm_pet_dir = Path("../tests/PNPMM-pet/20251124_112720/recons/")
+pnpmm_pet_dir = Path("../tests/PNPMM-pet/20251124_142235/recons/")
+
 
 num_imgs = 500
 nmse = dinv.metric.NMSE()
@@ -121,6 +123,8 @@ ax.set_xticks(x + width * (len(methods) - 1) / 2, mask_names, fontsize=fontsize)
 ax.legend(loc="upper left", ncols=1, fontsize=20)
 ax.set_ylim(0)
 ax.grid(axis="y", linestyle="--", alpha=0.7)
-fig.savefig("figure2.svg", format="svg")
+fig.savefig("figure2.pdf", format="pdf")
 
 plt.show()
+
+# %%
